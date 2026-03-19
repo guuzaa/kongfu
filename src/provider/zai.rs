@@ -1,6 +1,6 @@
 use crate::error::{KongfuError, Result};
 use crate::message::Message;
-use crate::provider::{ModelConfig, ModelResponse, Provider, Usage};
+use crate::provider::{ModelConfig, ModelResponse, Provider, RequestOptions, Usage};
 use async_trait::async_trait;
 use futures::Stream;
 use serde::Deserialize;
@@ -8,12 +8,18 @@ use serde_json::json;
 use std::pin::Pin;
 
 pub struct Zai {
-    api_key: String,
-    base_url: String,
+    config: ModelConfig,
     client: reqwest::Client,
 }
 
 impl Zai {
+    pub fn new(config: ModelConfig) -> Self {
+        Self {
+            config,
+            client: reqwest::Client::new(),
+        }
+    }
+
     pub fn builder() -> ZaiBuilder {
         ZaiBuilder::new()
     }
@@ -33,16 +39,29 @@ impl Zai {
 }
 
 pub struct ZaiBuilder {
+    model: Option<String>,
     api_key: Option<String>,
     base_url: Option<String>,
+    temperature: Option<f32>,
+    max_tokens: Option<u32>,
+    top_p: Option<f32>,
 }
 
 impl ZaiBuilder {
     pub fn new() -> Self {
         Self {
+            model: None,
             api_key: None,
             base_url: None,
+            temperature: None,
+            max_tokens: None,
+            top_p: None,
         }
+    }
+
+    pub fn model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
     }
 
     pub fn api_key(mut self, api_key: impl Into<String>) -> Self {
@@ -55,8 +74,25 @@ impl ZaiBuilder {
         self
     }
 
+    pub fn temperature(mut self, temperature: f32) -> Self {
+        self.temperature = Some(temperature);
+        self
+    }
+
+    pub fn max_tokens(mut self, max_tokens: u32) -> Self {
+        self.max_tokens = Some(max_tokens);
+        self
+    }
+
+    pub fn top_p(mut self, top_p: f32) -> Self {
+        self.top_p = Some(top_p);
+        self
+    }
+
     pub fn build(self) -> Result<Zai> {
-        let api_key = self.api_key.or_else(|| std::env::var("ZAI_API_KEY").ok())
+        let api_key = self
+            .api_key
+            .or_else(|| std::env::var("ZAI_API_KEY").ok())
             .ok_or_else(|| KongfuError::ExecutionError(
                 "api_key is required. Set it via ZaiBuilder::api_key() or ZAI_API_KEY environment variable".to_string()
             ))?;
@@ -66,9 +102,19 @@ impl ZaiBuilder {
             .or_else(|| std::env::var("ZAI_BASE_URL").ok())
             .unwrap_or_else(|| "https://api.z.ai/api/paas/v4".to_string());
 
-        Ok(Zai {
-            api_key,
+        let model = self.model.unwrap_or_else(|| "gpt-4".to_string());
+
+        let config = ModelConfig {
+            model,
             base_url,
+            api_key,
+            temperature: self.temperature.unwrap_or(0.7),
+            max_tokens: self.max_tokens,
+            top_p: self.top_p,
+        };
+
+        Ok(Zai {
+            config,
             client: reqwest::Client::new(),
         })
     }
@@ -295,30 +341,32 @@ impl Provider for Zai {
     async fn generate(
         &self,
         messages: Vec<Message>,
-        config: &ModelConfig,
+        options: &RequestOptions,
     ) -> Result<ModelResponse> {
-        let url = format!("{}/chat/completions", self.base_url);
+        let url = format!("{}/chat/completions", self.config.base_url);
         let converted_messages = self.convert_messages(messages);
 
         let mut body = json!({
-            "model": config.model,
+            "model": self.config.model,
             "messages": converted_messages,
-            "temperature": config.temperature,
-            "stream": false,
-            "tool_choice": config.tool_choice,
+            "temperature": self.config.temperature,
+            "stream": options.stream,
         });
 
-        if let Some(max_tokens) = config.max_tokens {
+        if let Some(max_tokens) = self.config.max_tokens {
             body["max_tokens"] = json!(max_tokens);
         }
-        if let Some(top_p) = config.top_p {
+        if let Some(top_p) = self.config.top_p {
             body["top_p"] = json!(top_p);
+        }
+        if let Some(tool_choice) = &options.tool_choice {
+            body["tool_choice"] = json!(tool_choice);
         }
 
         let response = self
             .client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
@@ -343,30 +391,32 @@ impl Provider for Zai {
     async fn stream_generate(
         &self,
         messages: Vec<Message>,
-        config: &ModelConfig,
+        options: &RequestOptions,
     ) -> Result<Box<dyn futures::Stream<Item = Result<String>> + Unpin + Send>> {
-        let url = format!("{}/chat/completions", self.base_url);
+        let url = format!("{}/chat/completions", self.config.base_url);
         let converted_messages = self.convert_messages(messages);
 
         let mut body = json!({
-            "model": config.model,
+            "model": self.config.model,
             "messages": converted_messages,
-            "temperature": config.temperature,
-            "stream": true,
-            "tool_choice": config.tool_choice,
+            "temperature": self.config.temperature,
+            "stream": options.stream,
         });
 
-        if let Some(max_tokens) = config.max_tokens {
+        if let Some(max_tokens) = self.config.max_tokens {
             body["max_tokens"] = json!(max_tokens);
         }
-        if let Some(top_p) = config.top_p {
+        if let Some(top_p) = self.config.top_p {
             body["top_p"] = json!(top_p);
+        }
+        if let Some(tool_choice) = &options.tool_choice {
+            body["tool_choice"] = json!(tool_choice);
         }
 
         let response = self
             .client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
@@ -397,13 +447,12 @@ mod tests {
     async fn test_zai_generate() {
         let zai = Zai::builder()
             .base_url("https://api.z.ai/api/coding/paas/v4")
+            .model("glm-4.7")
+            .temperature(1.0)
+            .max_tokens(48000)
             .build()
             .unwrap();
-        let config = ModelConfig {
-            model: "glm-4.7".into(),
-            temperature: 1.0,
-            max_tokens: Some(48000),
-            top_p: None,
+        let options = RequestOptions {
             stream: false,
             tool_choice: None,
         };
@@ -411,7 +460,7 @@ mod tests {
             Message::system("You are a helpful AI helper"),
             Message::user("Explain what's an LLM in short?"),
         ];
-        let resp = zai.generate(messages, &config).await;
+        let resp = zai.generate(messages, &options).await;
         match resp {
             Ok(response) => {
                 let content = response.content;
@@ -433,14 +482,13 @@ mod tests {
 
         let zai = Zai::builder()
             .base_url("https://api.z.ai/api/coding/paas/v4")
+            .model("glm-4.7")
+            .temperature(1.0)
+            .max_tokens(48_000)
             .build()
             .unwrap();
 
-        let config = ModelConfig {
-            model: "glm-4.7".into(),
-            temperature: 1.0,
-            max_tokens: Some(48_000),
-            top_p: None,
+        let options = RequestOptions {
             stream: true,
             tool_choice: None,
         };
@@ -450,7 +498,7 @@ mod tests {
             Message::user("Explain what's an LLM in short?"),
         ];
 
-        let mut stream = zai.stream_generate(messages, &config).await.unwrap();
+        let mut stream = zai.stream_generate(messages, &options).await.unwrap();
 
         let mut full_content = String::new();
         let mut chunk_count = 0;

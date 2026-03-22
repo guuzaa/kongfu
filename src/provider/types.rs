@@ -141,34 +141,15 @@ pub enum StreamingUpdate {
     Done(ModelResponse),
 }
 
-#[derive(Debug, Deserialize)]
-pub struct Choice {
-    pub(crate) message: MessageContent,
-    pub(crate) finish_reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct MessageContent {
-    #[serde(default)]
-    pub(crate) content: Option<String>,
-    #[serde(default)]
-    pub(crate) tool_calls: Option<Vec<ToolCall>>,
-    #[serde(default)]
-    pub(crate) tool_use_id: Option<String>,
-    #[serde(default)]
-    pub(crate) role: Option<String>,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct ToolCall {
     pub id: String,
-    pub function: FunctionCall,
+    pub function: Function,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct FunctionCall {
+pub struct Function {
     pub name: String,
-    // TODO
     pub arguments: String,
 }
 

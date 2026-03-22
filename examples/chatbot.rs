@@ -37,9 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         zai.config().model
     );
 
-    let options = RequestOptions {
-        tool_choice: None,
-    };
+    let options = RequestOptions { tool_choice: None };
 
     let mut messages = vec![Message::system(
         "You are a helpful, friendly, and knowledgeable AI assistant. \

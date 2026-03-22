@@ -1,7 +1,7 @@
 [package]
 name = "kongfu"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "An LLM abstraction layer"
 
 [dependencies]
@@ -18,3 +18,17 @@ uuid = {version = "1.22.0", features = ["v4", "serde"]}
 
 [dev-dependencies]
 mockall = "0.14.0"
+
+[workspace.lints.rust]
+expect_used = "deny"
+format_push_string = "deny"
+multiple_unsafe_ops_per_block = "deny"
+panic = "deny"
+panic_in_result_fn = "deny"
+string_lit_chars_any = "deny"
+string_slice = "deny"
+tests_outside_test_module = "deny"
+todo = "deny"
+unwrap_in_result = "deny"
+unwrap_used = "deny"
+undocumented_unsafe_blocks = "deny"

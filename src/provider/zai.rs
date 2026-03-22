@@ -1,7 +1,9 @@
 use crate::error::{KongfuError, Result};
 use crate::message::{ContentBlock, Message, ToolUseBlock};
 use crate::provider::types::{StreamingProvider, StreamingUpdate};
-use crate::provider::{ModelConfig, ModelResponse, Provider, ProviderName, RequestOptions, Usage};
+use crate::provider::{
+    ModelConfig, ModelResponse, Provider, ProviderName, RequestOptions, ToolCall, Usage,
+};
 use async_trait::async_trait;
 use futures::Stream;
 use serde::Deserialize;
@@ -141,19 +143,7 @@ struct ZaiMessage {
     #[serde(default)]
     role: Option<String>,
     #[serde(default)]
-    tool_calls: Option<Vec<ZaiToolCall>>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-struct ZaiToolCall {
-    id: String,
-    function: ZaiFunction,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-struct ZaiFunction {
-    name: String,
-    arguments: String,
+    tool_calls: Option<Vec<ToolCall>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -529,9 +519,7 @@ mod tests {
             .max_tokens(48000)
             .build()
             .unwrap();
-        let options = RequestOptions {
-            tool_choice: None,
-        };
+        let options = RequestOptions { tool_choice: None };
         let messages = vec![
             Message::system("You are a helpful AI helper"),
             Message::user("Explain what's an LLM in short?"),
@@ -566,9 +554,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let options = RequestOptions {
-            tool_choice: None,
-        };
+        let options = RequestOptions { tool_choice: None };
 
         let messages = vec![
             Message::system("You are a helpful AI helper"),

@@ -38,7 +38,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let options = RequestOptions {
-        stream: true,
         tool_choice: None,
     };
 

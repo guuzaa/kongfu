@@ -424,7 +424,7 @@ impl Provider for Zai {
             "model": self.config.model,
             "messages": messages,
             "temperature": self.config.temperature,
-            "stream": options.stream,
+            "stream": false,
         });
 
         if let Some(max_tokens) = self.config.max_tokens {
@@ -476,7 +476,7 @@ impl StreamingProvider for Zai {
             "model": self.config.model,
             "messages": messages,
             "temperature": self.config.temperature,
-            "stream": options.stream,
+            "stream": true,
         });
 
         if let Some(max_tokens) = self.config.max_tokens {
@@ -530,7 +530,6 @@ mod tests {
             .build()
             .unwrap();
         let options = RequestOptions {
-            stream: false,
             tool_choice: None,
         };
         let messages = vec![
@@ -568,7 +567,6 @@ mod tests {
             .unwrap();
 
         let options = RequestOptions {
-            stream: true,
             tool_choice: None,
         };
 

@@ -40,14 +40,12 @@ impl Default for ModelConfig {
 /// Options for individual requests
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestOptions {
-    pub stream: bool,
     pub tool_choice: Option<ToolChoice>,
 }
 
 impl Default for RequestOptions {
     fn default() -> Self {
         Self {
-            stream: false,
             tool_choice: Some(ToolChoice::Auto),
         }
     }

@@ -42,12 +42,12 @@ impl Memory for MemoryStore {
         let mut messages = self.messages.write().await;
         messages.push_back(message);
 
-        if let Some(max_size) = self.max_size {
-            if messages.len() > max_size {
-                let excess = messages.len() - max_size;
-                for _ in 0..excess {
-                    messages.pop_front();
-                }
+        if let Some(max_size) = self.max_size
+            && messages.len() > max_size
+        {
+            let excess = messages.len() - max_size;
+            for _ in 0..excess {
+                messages.pop_front();
             }
         }
 

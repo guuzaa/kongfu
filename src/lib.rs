@@ -10,4 +10,7 @@ pub use message::{
 };
 
 pub use provider::zai::Zai;
-pub use provider::{Capabilities, Model, ModelConfig, Provider, ProviderName, RequestOptions};
+pub use provider::{
+    Capabilities, Model, ModelConfig, ModelResponse, Provider, ProviderName, RequestOptions,
+    StreamingProvider, StreamingUpdate, Usage,
+};

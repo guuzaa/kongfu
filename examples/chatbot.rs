@@ -1,14 +1,13 @@
-use kongfu::{Message, Provider, RequestOptions, Role, Zai};
+use kongfu::{Message, RequestOptions, Role, StreamingProvider, StreamingUpdate, Zai};
 use std::io::{self, Write};
 
 fn print_welcome() {
     println!("╔════════════════════════════════════════════════════════════╗");
-    println!("║                  🤖 Multi-Round Chatbot                    ║");
+    println!("║          🤖 Multi-Round Chatbot (Streaming)               ║");
     println!("║                                                            ║");
     println!("║  Commands:                                                 ║");
     println!("║    /quit   - Exit the chatbot                              ║");
     println!("║    /clear  - Clear conversation history                    ║");
-    println!("║    /stats  - Show token usage statistics                   ║");
     println!("╚════════════════════════════════════════════════════════════╝");
     println!();
 }
@@ -39,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let options = RequestOptions {
-        stream: false,
+        stream: true,
         tool_choice: None,
     };
 
@@ -79,13 +78,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("✓ Conversation history cleared\n");
                 continue;
             }
-            "/stats" => {
-                print_usage(
-                    total_tokens,
-                    total_tokens as f64 * cost_per_1k_tokens / 1000.0,
-                );
-                continue;
-            }
             "" => continue,
             _ => {}
         }
@@ -93,29 +85,75 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Add user message to history
         messages.push(Message::user(input));
 
-        // Generate response
-        match zai.generate(&messages, &options).await {
-            Ok(response) => {
-                // Update usage statistics
-                if let Some(usage) = &response.usage {
-                    total_tokens += usage.total_tokens;
-                    println!(
-                        "   [Tokens: {} prompt + {} completion = {} total ({} cached)]",
-                        usage.prompt_tokens,
-                        usage.completion_tokens,
-                        usage.total_tokens,
-                        usage.cached_tokens
-                    );
+        // Generate streaming response
+        match zai.stream_generate(&messages, &options).await {
+            Ok(mut stream) => {
+                use futures::StreamExt;
+
+                print!("🤖 Assistant: ");
+                io::stdout().flush()?;
+                let mut thinking_cnt = 0;
+                let mut resp_cnt = 0;
+
+                let mut thinking_content = String::new();
+                let mut response_content = String::new();
+                let mut final_response = None;
+
+                while let Some(update_result) = stream.next().await {
+                    match update_result {
+                        Ok(StreamingUpdate::Thinking(chunk)) => {
+                            thinking_cnt += 1;
+                            thinking_content.push_str(&chunk);
+                            if thinking_cnt == 1 {
+                                print!("\x1b[90m<Thinking>:\x1b[0m\n{}", chunk);
+                            } else {
+                                print!("{}", chunk);
+                            }
+                            io::stdout().flush().unwrap();
+                        }
+                        Ok(StreamingUpdate::Content(chunk)) => {
+                            resp_cnt += 1;
+                            response_content.push_str(&chunk);
+                            if thinking_cnt > 0 && resp_cnt == 1 {
+                                print!("\n\x1b[90m</End of Thinking>:\x1b[0m\n{}", chunk);
+                            } else {
+                                print!("{}", chunk);
+                            }
+                            io::stdout().flush().unwrap();
+                        }
+                        Ok(StreamingUpdate::Done(response)) => {
+                            final_response = Some(response);
+                        }
+                        Err(e) => {
+                            eprintln!("\n❌ Stream error: {}", e);
+                        }
+                    }
                 }
 
-                // Extract and display text content
-                let text = response.content.as_text().unwrap_or("".to_string());
-                println!("🤖 Assistant: {}", text);
-                println!();
+                println!(); // End the line after streaming
 
-                let message = Message::new(Role::Assistant, response.content);
                 // Add assistant response to history
-                messages.push(message);
+                if let Some(response) = final_response {
+                    // Update usage statistics
+                    if let Some(usage) = &response.usage {
+                        total_tokens += usage.total_tokens;
+                        println!(
+                            "   [Tokens: {} prompt + {} completion = {} total ({} cached)]",
+                            usage.prompt_tokens,
+                            usage.completion_tokens,
+                            usage.total_tokens,
+                            usage.cached_tokens
+                        );
+                    }
+
+                    let message = Message::new(Role::Assistant, response.content);
+                    messages.push(message);
+
+                    if let Some(reason) = &response.finish_reason {
+                        println!("   [Finished: {}]", reason);
+                    }
+                }
+                println!();
             }
             Err(e) => {
                 eprintln!("❌ Error: {}", e);

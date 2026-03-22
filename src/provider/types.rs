@@ -133,6 +133,16 @@ pub struct Usage {
     pub total_tokens: usize,
 }
 
+#[derive(Debug, Clone)]
+pub enum StreamingUpdate {
+    /// Incremental thinking/reasoning content (reasoning_content field)
+    Thinking(String),
+    /// Incremental response content (content field)
+    Content(String),
+    /// Final complete response when stream finishes
+    Done(ModelResponse),
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Choice {
     pub(crate) message: MessageContent,
@@ -181,7 +191,7 @@ pub trait StreamingProvider: Provider {
         &self,
         messages: &[Message],
         options: &RequestOptions,
-    ) -> Result<Box<dyn futures::Stream<Item = Result<String>> + Unpin + Send>>;
+    ) -> Result<Box<dyn futures::Stream<Item = Result<StreamingUpdate>> + Unpin + Send>>;
 }
 
 pub trait Model: Send + Sync {

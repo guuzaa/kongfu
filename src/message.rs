@@ -132,10 +132,7 @@ impl ContentBlock {
     pub fn as_text(&self) -> Option<String> {
         match self {
             ContentBlock::Text(block) => Some(block.text.clone()),
-            ContentBlock::Thinking(block) => {
-                let thinking = format!("<think>{}</think>", &block.thinking);
-                Some(thinking)
-            }
+            ContentBlock::Thinking(block) => Some(block.thinking.clone()),
             _ => None,
         }
     }
@@ -319,7 +316,7 @@ mod tests {
         assert_eq!(text_block.as_text(), Some("Hello, world!".to_string()));
 
         let thinking_block = ContentBlock::thinking("thinking");
-        assert_eq!(thinking_block.as_text(), None);
+        assert_eq!(thinking_block.as_text(), Some("thinking".to_string()));
     }
 
     #[test]

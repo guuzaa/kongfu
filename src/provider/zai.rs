@@ -1,6 +1,6 @@
 use crate::error::{KongfuError, Result};
 use crate::message::{ContentBlock, Message, ToolUseBlock};
-use crate::provider::types::StreamingProvider;
+use crate::provider::types::{StreamingProvider, StreamingUpdate};
 use crate::provider::{ModelConfig, ModelResponse, Provider, ProviderName, RequestOptions, Usage};
 use async_trait::async_trait;
 use futures::Stream;
@@ -31,6 +31,7 @@ impl Zai {
     }
 }
 
+#[derive(Default)]
 pub struct ZaiBuilder {
     model: Option<String>,
     api_key: Option<String>,
@@ -43,12 +44,7 @@ pub struct ZaiBuilder {
 impl ZaiBuilder {
     pub fn new() -> Self {
         Self {
-            model: None,
-            api_key: None,
-            base_url: None,
-            temperature: None,
-            max_tokens: None,
-            top_p: None,
+            ..Default::default()
         }
     }
 
@@ -190,6 +186,8 @@ struct ZaiStreamChunk {
     created: Option<u64>,
     model: String,
     choices: Vec<ZaiStreamChoice>,
+    #[serde(default)]
+    usage: Option<ZaiUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -269,10 +267,15 @@ struct ZaiResponseStream {
     byte_stream: Pin<Box<dyn Stream<Item = reqwest::Result<bytes::Bytes>> + Send>>,
     buffer: String,
     is_done: bool,
+    thinking_content: String,
+    response_content: String,
+    finish_reason: Option<String>,
+    model: String,
+    usage: Option<Usage>,
 }
 
 impl ZaiResponseStream {
-    fn new<S>(byte_stream: S) -> Self
+    fn new<S>(byte_stream: S, model: String) -> Self
     where
         S: Stream<Item = reqwest::Result<bytes::Bytes>> + Send + 'static,
     {
@@ -280,10 +283,15 @@ impl ZaiResponseStream {
             byte_stream: Box::pin(byte_stream),
             buffer: String::new(),
             is_done: false,
+            thinking_content: String::new(),
+            response_content: String::new(),
+            finish_reason: None,
+            model,
+            usage: None,
         }
     }
 
-    fn parse_sse_event(&mut self, event: &str) -> Option<Result<String>> {
+    fn parse_sse_event(&mut self, event: &str) -> Option<Result<StreamingUpdate>> {
         let event = event.trim();
         if event.is_empty() {
             return None;
@@ -297,21 +305,53 @@ impl ZaiResponseStream {
 
         if data_str.trim() == "[DONE]" {
             self.is_done = true;
-            return Some(Ok(String::new()));
+            // Build the final content block
+            let content = if !self.response_content.is_empty() {
+                ContentBlock::text(self.response_content.clone())
+            } else if !self.thinking_content.is_empty() {
+                ContentBlock::thinking(self.thinking_content.clone())
+            } else {
+                ContentBlock::text(String::new())
+            };
+
+            let response = ModelResponse {
+                content,
+                model: self.model.clone(),
+                usage: self.usage.take(), // Include usage if available
+                finish_reason: self.finish_reason.clone(),
+            };
+            return Some(Ok(StreamingUpdate::Done(response)));
         }
 
         match serde_json::from_str::<ZaiStreamChunk>(data_str) {
             Ok(chunk) => {
+                // Update model from the first chunk
+                if self.model.is_empty() {
+                    self.model = chunk.model;
+                }
+
+                if let Some(usage) = chunk.usage {
+                    self.usage = Some(usage.into());
+                }
+
                 if let Some(choice) = chunk.choices.first() {
-                    if let Some(content) = &choice.delta.content {
-                        if !content.is_empty() {
-                            return Some(Ok(content.clone()));
-                        }
+                    // Store finish reason if present
+                    if let Some(reason) = &choice.finish_reason {
+                        self.finish_reason = Some(reason.clone());
                     }
-                    if let Some(reasoning) = &choice.delta.reasoning_content {
-                        if !reasoning.is_empty() {
-                            return Some(Ok(reasoning.clone()));
-                        }
+
+                    if let Some(reasoning) = &choice.delta.reasoning_content
+                        && !reasoning.is_empty()
+                    {
+                        self.thinking_content.push_str(reasoning);
+                        return Some(Ok(StreamingUpdate::Thinking(reasoning.clone())));
+                    }
+
+                    if let Some(content) = &choice.delta.content
+                        && !content.is_empty()
+                    {
+                        self.response_content.push_str(content);
+                        return Some(Ok(StreamingUpdate::Content(content.clone())));
                     }
                 }
                 None
@@ -325,7 +365,7 @@ impl ZaiResponseStream {
 }
 
 impl futures::Stream for ZaiResponseStream {
-    type Item = Result<String>;
+    type Item = Result<StreamingUpdate>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -429,7 +469,7 @@ impl StreamingProvider for Zai {
         &self,
         messages: &[Message],
         options: &RequestOptions,
-    ) -> Result<Box<dyn futures::Stream<Item = Result<String>> + Unpin + Send>> {
+    ) -> Result<Box<dyn futures::Stream<Item = Result<StreamingUpdate>> + Unpin + Send>> {
         let url = format!("{}/chat/completions", self.config.base_url);
 
         let mut body = json!({
@@ -468,7 +508,7 @@ impl StreamingProvider for Zai {
         }
 
         let byte_stream = response.bytes_stream();
-        let stream = ZaiResponseStream::new(byte_stream);
+        let stream = ZaiResponseStream::new(byte_stream, self.config.model.clone());
 
         Ok(Box::new(stream))
     }
@@ -477,6 +517,7 @@ impl StreamingProvider for Zai {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[tokio::test]
     #[ignore = "needs api key and takes time"]
@@ -538,19 +579,39 @@ mod tests {
 
         let mut stream = zai.stream_generate(&messages, &options).await.unwrap();
 
-        let mut full_content = String::new();
-        let mut chunk_count = 0;
+        let mut thinking_content = String::new();
+        let mut response_content = String::new();
+        let mut thinking_count = 0;
+        let mut content_count = 0;
         let mut total_results = 0;
+        let mut final_response = None;
 
-        while let Some(chunk_result) = stream.next().await {
+        while let Some(update_result) = stream.next().await {
             total_results += 1;
-            match chunk_result {
-                Ok(chunk) => {
-                    println!("Received chunk: {:?}", chunk);
-                    if !chunk.is_empty() {
-                        chunk_count += 1;
-                        full_content.push_str(&chunk);
+            match update_result {
+                Ok(StreamingUpdate::Thinking(chunk)) => {
+                    thinking_count += 1;
+                    thinking_content.push_str(&chunk);
+                    if thinking_count == 1 {
+                        print!("<think> {}", chunk);
+                    } else {
+                        print!("{}", chunk);
                     }
+                    std::io::stdout().flush().unwrap();
+                }
+                Ok(StreamingUpdate::Content(chunk)) => {
+                    content_count += 1;
+                    response_content.push_str(&chunk);
+                    if content_count == 1 && thinking_count > 0 {
+                        print!("\n</think>\n{}", chunk);
+                    } else {
+                        print!("{}", chunk); // Stream content in real-time
+                    }
+                    std::io::stdout().flush().unwrap();
+                }
+                Ok(StreamingUpdate::Done(response)) => {
+                    final_response = Some(response);
+                    println!("\n[Stream complete]");
                 }
                 Err(e) => {
                     eprintln!("Stream error: {}", e);
@@ -558,10 +619,25 @@ mod tests {
             }
         }
 
-        println!("Total results from stream: {}", total_results);
-        println!("Non-empty chunks: {}", chunk_count);
-        println!("Full content: {}", full_content);
+        println!("\n=== Stream Summary ===");
+        println!("Total updates: {}", total_results);
+        println!("Thinking chunks: {}", thinking_count);
+        println!("Content chunks: {}", content_count);
+        if !thinking_content.is_empty() {
+            println!("Total thinking: {} bytes", thinking_content.len());
+        }
+        println!("Total content: {} bytes", response_content.len());
 
-        assert!(chunk_count > 0, "Should receive at least one chunk");
+        if let Some(response) = &final_response {
+            println!("Model: {}", response.model);
+            if let Some(reason) = &response.finish_reason {
+                println!("Finish reason: {}", reason);
+            }
+        }
+
+        assert!(
+            content_count > 0 || thinking_count > 0,
+            "Should receive at least one chunk"
+        );
     }
 }

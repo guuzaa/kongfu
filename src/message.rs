@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
 pub enum Role {
     System,
     User,
@@ -22,26 +22,16 @@ impl From<Role> for &str {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
-    pub id: String,
     pub role: Role,
     pub content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<serde_json::Value>,
 }
 
 impl Message {
     pub fn new(role: Role, content: impl Into<String>) -> Self {
         Self {
-            id: Uuid::new_v4().to_string(),
             role,
             content: content.into(),
-            metadata: None,
         }
-    }
-
-    pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
-        self.metadata = Some(metadata);
-        self
     }
 
     pub fn system(content: impl Into<String>) -> Self {
@@ -69,7 +59,6 @@ mod tests {
     fn test_message_ctor() {
         let msg = Message::system("content");
         assert_eq!(msg.content, "content");
-        assert!(!msg.id.is_empty());
 
         let msg = Message::assistant("assistant content");
         assert_eq!(msg.content, "assistant content");

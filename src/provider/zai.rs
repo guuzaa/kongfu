@@ -1,6 +1,7 @@
 use crate::error::{KongfuError, Result};
 use crate::message::Message;
-use crate::provider::{ModelConfig, ModelResponse, Provider, RequestOptions, Usage};
+use crate::provider::types::StreamingProvider;
+use crate::provider::{ModelConfig, ModelResponse, Provider, ProviderName, RequestOptions, Usage};
 use async_trait::async_trait;
 use futures::Stream;
 use serde::Deserialize;
@@ -22,19 +23,6 @@ impl Zai {
 
     pub fn builder() -> ZaiBuilder {
         ZaiBuilder::new()
-    }
-
-    fn convert_messages(&self, messages: Vec<Message>) -> Vec<serde_json::Value> {
-        messages
-            .into_iter()
-            .map(|msg| {
-                let role: &str = msg.role.into();
-                json!({
-                    "role": role,
-                    "content": msg.content
-                })
-            })
-            .collect()
     }
 }
 
@@ -334,21 +322,20 @@ impl futures::Stream for ZaiResponseStream {
 
 #[async_trait]
 impl Provider for Zai {
-    fn name(&self) -> &str {
-        "z.ai"
+    fn name(&self) -> ProviderName {
+        ProviderName::Zai
     }
 
     async fn generate(
         &self,
-        messages: Vec<Message>,
+        messages: &[Message],
         options: &RequestOptions,
     ) -> Result<ModelResponse> {
         let url = format!("{}/chat/completions", self.config.base_url);
-        let converted_messages = self.convert_messages(messages);
 
         let mut body = json!({
             "model": self.config.model,
-            "messages": converted_messages,
+            "messages": messages,
             "temperature": self.config.temperature,
             "stream": options.stream,
         });
@@ -387,18 +374,20 @@ impl Provider for Zai {
 
         Ok(api_response.try_into()?)
     }
+}
 
+#[async_trait]
+impl StreamingProvider for Zai {
     async fn stream_generate(
         &self,
-        messages: Vec<Message>,
+        messages: &[Message],
         options: &RequestOptions,
     ) -> Result<Box<dyn futures::Stream<Item = Result<String>> + Unpin + Send>> {
         let url = format!("{}/chat/completions", self.config.base_url);
-        let converted_messages = self.convert_messages(messages);
 
         let mut body = json!({
             "model": self.config.model,
-            "messages": converted_messages,
+            "messages": messages,
             "temperature": self.config.temperature,
             "stream": options.stream,
         });
@@ -460,7 +449,7 @@ mod tests {
             Message::system("You are a helpful AI helper"),
             Message::user("Explain what's an LLM in short?"),
         ];
-        let resp = zai.generate(messages, &options).await;
+        let resp = zai.generate(&messages, &options).await;
         match resp {
             Ok(response) => {
                 let content = response.content;
@@ -498,7 +487,7 @@ mod tests {
             Message::user("Explain what's an LLM in short?"),
         ];
 
-        let mut stream = zai.stream_generate(messages, &options).await.unwrap();
+        let mut stream = zai.stream_generate(&messages, &options).await.unwrap();
 
         let mut full_content = String::new();
         let mut chunk_count = 0;

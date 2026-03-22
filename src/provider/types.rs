@@ -53,6 +53,71 @@ impl Default for RequestOptions {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum ProviderName {
+    OpenAI,
+    Anthropic,
+    Xai,
+    Zai,
+    Custom(String),
+}
+
+impl ProviderName {
+    pub fn as_str(&self) -> &str {
+        match self {
+            ProviderName::OpenAI => "openai",
+            ProviderName::Anthropic => "anthropic",
+            ProviderName::Xai => "xAI",
+            ProviderName::Zai => "z.ai",
+            ProviderName::Custom(name) => name.as_str(),
+        }
+    }
+}
+
+impl std::fmt::Display for ProviderName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl From<&str> for ProviderName {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "openai" => ProviderName::OpenAI,
+            "anthropic" => ProviderName::Anthropic,
+            "z.ai" | "zai" => ProviderName::Zai,
+            "xai" => ProviderName::Xai,
+            other => ProviderName::Custom(other.to_string()),
+        }
+    }
+}
+
+impl From<String> for ProviderName {
+    fn from(s: String) -> Self {
+        ProviderName::from(s.as_str())
+    }
+}
+
+/// Provider capabilities
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Capabilities {
+    pub streaming: bool,
+    pub tool_use: bool,
+    pub vision: bool,
+    pub max_context_tokens: u32,
+}
+
+impl Default for Capabilities {
+    fn default() -> Self {
+        Self {
+            streaming: false,
+            tool_use: false,
+            vision: false,
+            max_context_tokens: 4096,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelResponse {
     pub content: String,
@@ -82,15 +147,25 @@ pub struct MessageContent {
 
 #[async_trait]
 pub trait Provider: Send + Sync {
-    fn name(&self) -> &str;
+    fn name(&self) -> ProviderName;
+
     async fn generate(
         &self,
-        messages: Vec<Message>,
+        messages: &[Message],
         options: &RequestOptions,
     ) -> Result<ModelResponse>;
+}
+
+#[async_trait]
+pub trait StreamingProvider: Provider {
     async fn stream_generate(
         &self,
-        messages: Vec<Message>,
+        messages: &[Message],
         options: &RequestOptions,
     ) -> Result<Box<dyn futures::Stream<Item = Result<String>> + Unpin + Send>>;
+}
+
+pub trait Model: Send + Sync {
+    fn name(&self) -> &str;
+    fn capabilities(&self) -> Capabilities;
 }

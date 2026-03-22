@@ -1,11 +1,12 @@
 use crate::error::{KongfuError, Result};
-use crate::message::Message;
+use crate::message::{ContentBlock, Message, ToolUseBlock};
 use crate::provider::types::StreamingProvider;
 use crate::provider::{ModelConfig, ModelResponse, Provider, ProviderName, RequestOptions, Usage};
 use async_trait::async_trait;
 use futures::Stream;
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashMap;
 use std::pin::Pin;
 
 pub struct Zai {
@@ -23,6 +24,10 @@ impl Zai {
 
     pub fn builder() -> ZaiBuilder {
         ZaiBuilder::new()
+    }
+
+    pub fn config(&self) -> &ModelConfig {
+        &self.config
     }
 }
 
@@ -133,11 +138,26 @@ struct ZaiChoice {
 
 #[derive(Debug, Deserialize)]
 struct ZaiMessage {
-    content: String,
+    #[serde(default)]
+    content: Option<String>,
     #[serde(default)]
     reasoning_content: Option<String>,
     #[serde(default)]
     role: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<ZaiToolCall>>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct ZaiToolCall {
+    id: String,
+    function: ZaiFunction,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct ZaiFunction {
+    name: String,
+    arguments: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -195,6 +215,7 @@ impl From<ZaiUsage> for Usage {
         Self {
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
+            cached_tokens: usage.prompt_tokens_details.cached_tokens,
             total_tokens: usage.total_tokens,
         }
     }
@@ -209,8 +230,34 @@ impl TryFrom<ZaiResponse> for ModelResponse {
             .first()
             .ok_or_else(|| KongfuError::ExecutionError("No choices in Zai response".to_string()))?;
 
+        let content = if let Some(text) = &choice.message.content {
+            ContentBlock::text(text.clone())
+        } else if let Some(reasoning) = &choice.message.reasoning_content {
+            ContentBlock::thinking(reasoning.clone())
+        } else if let Some(tool_calls) = &choice.message.tool_calls
+            && !tool_calls.is_empty()
+        {
+            // TODO Take the first tool call
+            let tool_call = &tool_calls[0];
+            let args_map: HashMap<String, serde_json::Value> =
+                serde_json::from_str(&tool_call.function.arguments).map_err(|e| {
+                    KongfuError::ExecutionError(format!(
+                        "Failed to parse tool call arguments: {}",
+                        e
+                    ))
+                })?;
+
+            ContentBlock::ToolUse(ToolUseBlock::new(
+                tool_call.id.clone(),
+                tool_call.function.name.clone(),
+                args_map,
+            ))
+        } else {
+            ContentBlock::text("")
+        };
+
         Ok(Self {
-            content: choice.message.content.clone(),
+            content,
             model: response.model,
             usage: Some(response.usage.into()),
             finish_reason: Some(choice.finish_reason.clone()),
@@ -452,10 +499,12 @@ mod tests {
         let resp = zai.generate(&messages, &options).await;
         match resp {
             Ok(response) => {
-                let content = response.content;
+                let content = &response.content;
                 let usage = response.usage.unwrap();
                 assert!(usage.total_tokens > 0);
-                println!("content: {:?}", content);
+                if let Some(text) = content.as_text() {
+                    println!("text: {}", text);
+                }
                 println!("usage: {:?}", usage);
             }
             Err(err) => {

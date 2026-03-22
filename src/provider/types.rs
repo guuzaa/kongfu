@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::message::Message;
+use crate::message::{ContentBlock, Message};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -98,7 +98,6 @@ impl From<String> for ProviderName {
     }
 }
 
-/// Provider capabilities
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Capabilities {
     pub streaming: bool,
@@ -120,7 +119,7 @@ impl Default for Capabilities {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelResponse {
-    pub content: String,
+    pub content: ContentBlock,
     pub model: String,
     pub usage: Option<Usage>,
     pub finish_reason: Option<String>,
@@ -130,6 +129,7 @@ pub struct ModelResponse {
 pub struct Usage {
     pub prompt_tokens: usize,
     pub completion_tokens: usize,
+    pub cached_tokens: usize,
     pub total_tokens: usize,
 }
 
@@ -140,9 +140,28 @@ pub struct Choice {
 }
 
 #[derive(Debug, Deserialize)]
-// TODO
 pub struct MessageContent {
-    pub(crate) content: String,
+    #[serde(default)]
+    pub(crate) content: Option<String>,
+    #[serde(default)]
+    pub(crate) tool_calls: Option<Vec<ToolCall>>,
+    #[serde(default)]
+    pub(crate) tool_use_id: Option<String>,
+    #[serde(default)]
+    pub(crate) role: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    pub function: FunctionCall,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FunctionCall {
+    pub name: String,
+    // TODO
+    pub arguments: String,
 }
 
 #[async_trait]

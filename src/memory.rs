@@ -76,7 +76,7 @@ impl Memory for MemoryStore {
 mod tests {
     use crate::{
         memory::{Memory, MemoryStore},
-        message::Message,
+        message::{ContentBlock, Message},
     };
 
     #[tokio::test]
@@ -90,7 +90,13 @@ mod tests {
         assert_eq!(3, messages.len());
         let recent_messages = store.get_recent(1).await.unwrap();
         assert_eq!(1, recent_messages.len());
-        assert_eq!(recent_messages[0].content, "tool calling");
+
+        // Check that the content is a TextBlock with the expected text
+        if let ContentBlock::Text(text_block) = &recent_messages[0].content {
+            assert_eq!(text_block.text, "tool calling");
+        } else {
+            panic!("Expected TextBlock in content");
+        }
 
         store.clear().await.unwrap();
         let messages = store.get_all().await.unwrap();

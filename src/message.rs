@@ -163,7 +163,7 @@ impl serde::Serialize for Message {
     {
         use serde::ser::SerializeMap;
 
-        let mut map = serializer.serialize_map(Some(2))?;
+        let mut map = serializer.serialize_map(None)?;
         map.serialize_entry("role", &self.role)?;
 
         match &self.content {
@@ -173,11 +173,27 @@ impl serde::Serialize for Message {
             ContentBlock::Thinking(ThinkingBlock { thinking }) => {
                 map.serialize_entry("content", thinking)?;
             }
-            ContentBlock::ToolUse(block) => {
-                map.serialize_entry("content", block)?;
+            ContentBlock::ToolUse(tool_use) => {
+                let function_call = serde_json::json!({
+                    "name": tool_use.name,
+                    "arguments": serde_json::to_string(&tool_use.input).unwrap_or_default()
+                });
+                map.serialize_entry(
+                    "tool_calls",
+                    &vec![serde_json::json!({
+                        "id": tool_use.id,
+                        "type": "function",
+                        "function": function_call
+                    })],
+                )?;
             }
             ContentBlock::ToolResult(result) => {
-                map.serialize_entry("content", result)?;
+                map.serialize_entry("tool_call_id", &result.tool_use_id)?;
+                let content_str = match &result.content {
+                    Some(ToolResultContent::Text(s)) => s.as_str(),
+                    Some(ToolResultContent::Objects(_)) | None => "",
+                };
+                map.serialize_entry("content", content_str)?;
             }
         }
 
@@ -366,6 +382,6 @@ mod tests {
 
         assert_eq!(value["role"], "assistant");
         // Single non-text block serializes to an object with type field
-        assert!(value["content"].is_object());
+        assert!(value["content"].is_null());
     }
 }

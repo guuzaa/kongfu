@@ -11,6 +11,6 @@ pub use message::{
 
 pub use provider::zai::Zai;
 pub use provider::{
-    Capabilities, Model, ModelConfig, ModelResponse, Provider, ProviderName, RequestOptions,
-    StreamingProvider, StreamingUpdate, Usage,
+    Capabilities, FunctionDefinition, Model, ModelConfig, ModelResponse, Provider, ProviderName,
+    RequestOptions, StreamingProvider, StreamingUpdate, Tool, ToolCall, ToolChoice, Usage,
 };

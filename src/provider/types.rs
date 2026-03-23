@@ -117,7 +117,7 @@ impl Default for Capabilities {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelResponse {
-    pub content: ContentBlock,
+    pub content: Vec<ContentBlock>,
     pub model: String,
     pub usage: Option<Usage>,
     pub finish_reason: Option<String>,
@@ -153,6 +153,19 @@ pub struct Function {
     pub arguments: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "function", rename_all = "lowercase")]
+pub enum Tool {
+    Function(FunctionDefinition),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
 #[async_trait]
 pub trait Provider: Send + Sync {
     fn name(&self) -> ProviderName;
@@ -160,6 +173,7 @@ pub trait Provider: Send + Sync {
     async fn generate(
         &self,
         messages: &[Message],
+        tools: Option<&[Tool]>,
         options: &RequestOptions,
     ) -> Result<ModelResponse>;
 }
@@ -169,6 +183,7 @@ pub trait StreamingProvider: Provider {
     async fn stream_generate(
         &self,
         messages: &[Message],
+        tools: Option<&[Tool]>,
         options: &RequestOptions,
     ) -> Result<Box<dyn futures::Stream<Item = Result<StreamingUpdate>> + Unpin + Send>>;
 }

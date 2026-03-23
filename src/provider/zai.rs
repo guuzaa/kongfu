@@ -2,7 +2,7 @@ use crate::error::{KongfuError, Result};
 use crate::message::{ContentBlock, Message, ToolUseBlock};
 use crate::provider::types::{StreamingProvider, StreamingUpdate};
 use crate::provider::{
-    ModelConfig, ModelResponse, Provider, ProviderName, RequestOptions, ToolCall, Usage,
+    ModelConfig, ModelResponse, Provider, ProviderName, RequestOptions, Tool, ToolCall, Usage,
 };
 use async_trait::async_trait;
 use futures::Stream;
@@ -218,34 +218,40 @@ impl TryFrom<ZaiResponse> for ModelResponse {
             .first()
             .ok_or_else(|| KongfuError::ExecutionError("No choices in Zai response".to_string()))?;
 
-        let content = if let Some(text) = &choice.message.content {
-            ContentBlock::text(text.clone())
-        } else if let Some(reasoning) = &choice.message.reasoning_content {
-            ContentBlock::thinking(reasoning.clone())
-        } else if let Some(tool_calls) = &choice.message.tool_calls
-            && !tool_calls.is_empty()
-        {
-            // TODO Take the first tool call
-            let tool_call = &tool_calls[0];
-            let args_map: HashMap<String, serde_json::Value> =
-                serde_json::from_str(&tool_call.function.arguments).map_err(|e| {
-                    KongfuError::ExecutionError(format!(
-                        "Failed to parse tool call arguments: {}",
-                        e
-                    ))
-                })?;
+        let mut content_blocks = Vec::new();
 
-            ContentBlock::ToolUse(ToolUseBlock::new(
-                tool_call.id.clone(),
-                tool_call.function.name.clone(),
-                args_map,
-            ))
-        } else {
-            ContentBlock::text("")
-        };
+        if let Some(reasoning) = &choice.message.reasoning_content {
+            content_blocks.push(ContentBlock::thinking(reasoning.clone()));
+        }
+
+        if let Some(text) = &choice.message.content {
+            content_blocks.push(ContentBlock::text(text.clone()));
+        }
+
+        if let Some(tool_calls) = &choice.message.tool_calls {
+            for tool_call in tool_calls {
+                let args_map: HashMap<String, serde_json::Value> =
+                    serde_json::from_str(&tool_call.function.arguments).map_err(|e| {
+                        KongfuError::ExecutionError(format!(
+                            "Failed to parse tool call arguments: {}",
+                            e
+                        ))
+                    })?;
+
+                content_blocks.push(ContentBlock::ToolUse(ToolUseBlock::new(
+                    tool_call.id.clone(),
+                    tool_call.function.name.clone(),
+                    args_map,
+                )));
+            }
+        }
+
+        if content_blocks.is_empty() {
+            content_blocks.push(ContentBlock::text(""));
+        }
 
         Ok(Self {
-            content,
+            content: content_blocks,
             model: response.model,
             usage: Some(response.usage.into()),
             finish_reason: Some(choice.finish_reason.clone()),
@@ -295,17 +301,21 @@ impl ZaiResponseStream {
 
         if data_str.trim() == "[DONE]" {
             self.is_done = true;
-            // Build the final content block
-            let content = if !self.response_content.is_empty() {
-                ContentBlock::text(self.response_content.clone())
-            } else if !self.thinking_content.is_empty() {
-                ContentBlock::thinking(self.thinking_content.clone())
-            } else {
-                ContentBlock::text(String::new())
-            };
+            let mut content_blocks = Vec::new();
+
+            if !self.thinking_content.is_empty() {
+                content_blocks.push(ContentBlock::thinking(self.thinking_content.clone()));
+            }
+            if !self.response_content.is_empty() {
+                content_blocks.push(ContentBlock::text(self.response_content.clone()));
+            }
+
+            if content_blocks.is_empty() {
+                content_blocks.push(ContentBlock::text(String::new()));
+            }
 
             let response = ModelResponse {
-                content,
+                content: content_blocks,
                 model: self.model.clone(),
                 usage: self.usage.take(), // Include usage if available
                 finish_reason: self.finish_reason.clone(),
@@ -406,6 +416,7 @@ impl Provider for Zai {
     async fn generate(
         &self,
         messages: &[Message],
+        tools: Option<&[Tool]>,
         options: &RequestOptions,
     ) -> Result<ModelResponse> {
         let url = format!("{}/chat/completions", self.config.base_url);
@@ -425,6 +436,9 @@ impl Provider for Zai {
         }
         if let Some(tool_choice) = &options.tool_choice {
             body["tool_choice"] = json!(tool_choice);
+        }
+        if let Some(tools) = tools {
+            body["tools"] = json!(tools);
         }
 
         let response = self
@@ -458,6 +472,7 @@ impl StreamingProvider for Zai {
     async fn stream_generate(
         &self,
         messages: &[Message],
+        tools: Option<&[Tool]>,
         options: &RequestOptions,
     ) -> Result<Box<dyn futures::Stream<Item = Result<StreamingUpdate>> + Unpin + Send>> {
         let url = format!("{}/chat/completions", self.config.base_url);
@@ -477,6 +492,9 @@ impl StreamingProvider for Zai {
         }
         if let Some(tool_choice) = &options.tool_choice {
             body["tool_choice"] = json!(tool_choice);
+        }
+        if let Some(tools) = tools {
+            body["tools"] = json!(tools);
         }
 
         let response = self
@@ -524,14 +542,18 @@ mod tests {
             Message::system("You are a helpful AI helper"),
             Message::user("Explain what's an LLM in short?"),
         ];
-        let resp = zai.generate(&messages, &options).await;
+        let resp = zai.generate(&messages, None, &options).await;
         match resp {
             Ok(response) => {
                 let content = &response.content;
                 let usage = response.usage.unwrap();
                 assert!(usage.total_tokens > 0);
-                if let Some(text) = content.as_text() {
-                    println!("text: {}", text);
+                // Print first text block if any
+                for block in content {
+                    if let Some(text) = block.as_text() {
+                        println!("text: {}", text);
+                        break;
+                    }
                 }
                 println!("usage: {:?}", usage);
             }
@@ -561,7 +583,10 @@ mod tests {
             Message::user("Explain what's an LLM in short?"),
         ];
 
-        let mut stream = zai.stream_generate(&messages, &options).await.unwrap();
+        let mut stream = zai
+            .stream_generate(&messages, None, &options)
+            .await
+            .unwrap();
 
         let mut thinking_content = String::new();
         let mut response_content = String::new();

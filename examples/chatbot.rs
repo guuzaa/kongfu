@@ -83,7 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         messages.push(Message::user(input));
 
         // Generate streaming response
-        match zai.stream_generate(&messages, &options).await {
+        match zai.stream_generate(&messages, None, &options).await {
             Ok(mut stream) => {
                 use futures::StreamExt;
 
@@ -143,8 +143,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
 
-                    let message = Message::new(Role::Assistant, response.content);
-                    messages.push(message);
+                    response
+                        .content
+                        .into_iter()
+                        .map(|block| Message::assistant(block))
+                        .for_each(|msg| messages.push(msg));
 
                     if let Some(reason) = &response.finish_reason {
                         println!("   [Finished: {}]", reason);

@@ -137,6 +137,8 @@ pub enum StreamingUpdate {
     Thinking(String),
     /// Incremental response content (content field)
     Content(String),
+    /// Tool call received during streaming
+    ToolCall(ToolCall),
     /// Final complete response when stream finishes
     Done(ModelResponse),
 }

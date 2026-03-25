@@ -45,9 +45,7 @@ pub struct ZaiBuilder {
 
 impl ZaiBuilder {
     pub fn new() -> Self {
-        Self {
-            ..Default::default()
-        }
+        Self::default()
     }
 
     pub fn model(mut self, model: impl Into<String>) -> Self {
@@ -189,13 +187,19 @@ struct ZaiStreamChoice {
 }
 
 #[derive(Debug, Deserialize)]
-struct ZaiStreamDelta {
-    #[serde(default)]
-    content: Option<String>,
-    #[serde(default)]
-    role: Option<String>,
-    #[serde(default)]
-    reasoning_content: Option<String>,
+#[serde(untagged)]
+enum ZaiStreamDelta {
+    ToolCalls {
+        tool_calls: Vec<ToolCall>,
+    },
+    Content {
+        role: String,
+        content: String,
+    },
+    Reasoning {
+        role: String,
+        reasoning_content: String,
+    },
 }
 
 impl From<ZaiUsage> for Usage {
@@ -268,6 +272,7 @@ struct ZaiResponseStream {
     finish_reason: Option<String>,
     model: String,
     usage: Option<Usage>,
+    tool_calls: Vec<ToolCall>,
 }
 
 impl ZaiResponseStream {
@@ -284,6 +289,7 @@ impl ZaiResponseStream {
             finish_reason: None,
             model,
             usage: None,
+            tool_calls: Vec::new(),
         }
     }
 
@@ -308,6 +314,25 @@ impl ZaiResponseStream {
             }
             if !self.response_content.is_empty() {
                 content_blocks.push(ContentBlock::text(self.response_content.clone()));
+            }
+
+            for tool_call in &self.tool_calls {
+                let args_map: HashMap<String, serde_json::Value> =
+                    match serde_json::from_str(&tool_call.function.arguments) {
+                        Ok(map) => map,
+                        Err(e) => {
+                            return Some(Err(KongfuError::ExecutionError(format!(
+                                "Failed to parse tool call arguments: {}",
+                                e
+                            ))));
+                        }
+                    };
+
+                content_blocks.push(ContentBlock::ToolUse(ToolUseBlock::new(
+                    tool_call.id.clone(),
+                    tool_call.function.name.clone(),
+                    args_map,
+                )));
             }
 
             if content_blocks.is_empty() {
@@ -340,18 +365,49 @@ impl ZaiResponseStream {
                         self.finish_reason = Some(reason.clone());
                     }
 
-                    if let Some(reasoning) = &choice.delta.reasoning_content
-                        && !reasoning.is_empty()
-                    {
-                        self.thinking_content.push_str(reasoning);
-                        return Some(Ok(StreamingUpdate::Thinking(reasoning.clone())));
-                    }
+                    match &choice.delta {
+                        ZaiStreamDelta::Reasoning {
+                            reasoning_content, ..
+                        } => {
+                            if !reasoning_content.is_empty() {
+                                self.thinking_content.push_str(reasoning_content);
+                                return Some(Ok(StreamingUpdate::Thinking(
+                                    reasoning_content.clone(),
+                                )));
+                            }
+                        }
+                        ZaiStreamDelta::Content { content, .. } => {
+                            if !content.is_empty() {
+                                self.response_content.push_str(content);
+                                return Some(Ok(StreamingUpdate::Content(content.clone())));
+                            }
+                        }
+                        ZaiStreamDelta::ToolCalls { tool_calls } => {
+                            for tool_call in tool_calls {
+                                // Check if we already have this tool call (by id)
+                                let existing_pos =
+                                    self.tool_calls.iter().position(|tc| tc.id == tool_call.id);
 
-                    if let Some(content) = &choice.delta.content
-                        && !content.is_empty()
-                    {
-                        self.response_content.push_str(content);
-                        return Some(Ok(StreamingUpdate::Content(content.clone())));
+                                if let Some(pos) = existing_pos {
+                                    // Append to existing tool call's arguments
+                                    self.tool_calls[pos]
+                                        .function
+                                        .arguments
+                                        .push_str(&tool_call.function.arguments);
+                                } else {
+                                    // Add new tool call
+                                    self.tool_calls.push(tool_call.clone());
+                                }
+
+                                // Emit the tool call update
+                                // Note: We emit it when complete (when it has both id and arguments)
+                                if !tool_call.id.is_empty()
+                                    && !tool_call.function.arguments.is_empty()
+                                {
+                                    return Some(Ok(StreamingUpdate::ToolCall(tool_call.clone())));
+                                }
+                            }
+                        }
                     }
                 }
                 None
@@ -525,6 +581,7 @@ impl StreamingProvider for Zai {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ToolChoice;
     use std::io::Write;
 
     #[tokio::test]
@@ -618,6 +675,10 @@ mod tests {
                     }
                     std::io::stdout().flush().unwrap();
                 }
+                Ok(StreamingUpdate::ToolCall(_tool_call)) => {
+                    // Handle tool calls if any
+                    println!("\n[Tool call received]");
+                }
                 Ok(StreamingUpdate::Done(response)) => {
                     final_response = Some(response);
                     println!("\n[Stream complete]");
@@ -648,5 +709,84 @@ mod tests {
             content_count > 0 || thinking_count > 0,
             "Should receive at least one chunk"
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "needs api key and takes time"]
+    async fn test_zai_stream_generate_with_tools() {
+        use futures::StreamExt;
+
+        let zai = Zai::builder()
+            .base_url("https://open.bigmodel.cn/api/paas/v4")
+            .model("glm-4.7-flash")
+            .temperature(1.0)
+            .max_tokens(48_000)
+            .build()
+            .unwrap();
+
+        let tools = vec![Tool::Function(crate::provider::types::FunctionDefinition {
+            name: "get_current_time".to_string(),
+            description: "Get the current time".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        })];
+
+        let options = RequestOptions {
+            tool_choice: Some(ToolChoice::Auto),
+        };
+
+        let messages = vec![
+            Message::system("You are a helpful AI helper"),
+            Message::user("What time is it? Use the get_current_time tool."),
+        ];
+
+        let mut stream = zai
+            .stream_generate(&messages, Some(&tools), &options)
+            .await
+            .unwrap();
+
+        let mut tool_call_count = 0;
+        let mut content_count = 0;
+        let mut final_response = None;
+
+        while let Some(update_result) = stream.next().await {
+            match update_result {
+                Ok(StreamingUpdate::ToolCall(_tool_call)) => {
+                    tool_call_count += 1;
+                    println!("\n[Tool call received]");
+                }
+                Ok(StreamingUpdate::Content(_chunk)) => {
+                    content_count += 1;
+                }
+                Ok(StreamingUpdate::Done(response)) => {
+                    final_response = Some(response);
+                    println!("\n[Stream complete]");
+                }
+                Ok(StreamingUpdate::Thinking(_chunk)) => {
+                    // Ignore thinking for this test
+                }
+                Err(e) => {
+                    eprintln!("Stream error: {}", e);
+                }
+            }
+        }
+
+        println!("\n=== Tool Call Test Summary ===");
+        println!("Tool calls received: {}", tool_call_count);
+        println!("Content chunks: {}", content_count);
+
+        // Verify we got a final response
+        assert!(final_response.is_some(), "Should receive final response");
+
+        // Verify the response contains tool use blocks
+        if let Some(response) = &final_response {
+            let has_tool_use = response
+                .content
+                .iter()
+                .any(|block| matches!(block, ContentBlock::ToolUse(_)));
+            assert!(has_tool_use, "Response should contain tool use blocks");
+        }
     }
 }

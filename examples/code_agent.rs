@@ -1,109 +1,50 @@
 use kongfu::{
-    ContentBlock, FunctionDefinition, Message, RequestOptions, StreamingProvider, Tool, ToolChoice,
-    ToolResultContent, ToolUseBlock, Zai,
+    ContentBlock, EditFile, ListDirectory, Message, ReadFile, RequestOptions, StreamingProvider,
+    ToolChoice, ToolRegistry, ToolResultContent, ToolUseBlock, Zai,
 };
-use serde_json::json;
 use std::collections::HashMap;
 use std::io::Write;
 
-/// Define available tools for the agent
-fn get_tools() -> Vec<Tool> {
-    vec![
-        Tool::Function(FunctionDefinition {
-            name: "list_directory".to_string(),
-            description:
-                "List files and directories in a given path. Use this to explore the file system."
-                    .to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "The directory path to list (default: current directory '.')"
-                    }
-                }
-            }),
-        }),
-        Tool::Function(FunctionDefinition {
-            name: "read_file".to_string(),
-            description: "Read the contents of a file. Use this to examine file contents."
-                .to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "The path to the file to read"
-                    }
-                },
-                "required": ["path"]
-            }),
-        }),
-    ]
-}
-
-/// Execute a tool call and return the result
-fn execute_tool(name: &str, input: &HashMap<String, serde_json::Value>) -> Result<String, String> {
-    match name {
-        "list_directory" => {
-            let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-
-            std::fs::read_dir(path)
-                .map(|entries| {
-                    let mut result = String::new();
-                    for entry in entries.filter_map(|e| e.ok()) {
-                        let file_name = entry.file_name().to_string_lossy().to_string();
-                        let file_type = if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                            "DIR"
-                        } else {
-                            "FILE"
-                        };
-                        result.push_str(&format!("  [{}] {}\n", file_type, file_name));
-                    }
-                    if result.is_empty() {
-                        result = "(empty directory)".to_string();
-                    }
-                    result
-                })
-                .map_err(|e| format!("Failed to list directory: {}", e))
-        }
-        "read_file" => {
-            let path = input
-                .get("path")
-                .and_then(|v| v.as_str())
-                .ok_or("Missing 'path' parameter")?;
-
-            std::fs::read_to_string(path)
-                .map_err(|e| format!("Failed to read file '{}': {}", path, e))
-        }
-        _ => Err(format!("Unknown tool: {}", name)),
-    }
-}
-
-/// Run the streaming agent loop
-async fn run_streaming_agent(
-    zai: &Zai,
-    user_query: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+/// Run the code assistant agent loop with streaming support
+async fn run_code_agent(zai: &Zai, user_query: &str) -> Result<(), Box<dyn std::error::Error>> {
     use futures::StreamExt;
 
-    let tools = get_tools();
+    // Register all available tools for code editing
+    let tool_registry = ToolRegistry::new()
+        .add(ListDirectory)
+        .add(ReadFile)
+        .add(EditFile);
+    let tools = tool_registry.to_tools();
+
     let options = RequestOptions {
         tool_choice: Some(ToolChoice::Auto),
     };
 
     let mut messages = vec![
         Message::system(
-            "You are a helpful AI assistant with access to tools. \
-             When you need to explore the file system or read files, use the available tools. \
-             Always explain what you're doing before using a tool. \
-             After getting tool results, provide a clear summary of what you found.",
+            "You are an expert code assistant with access to file system tools. \
+             Your capabilities include:\n\
+             - 📂 Exploring directory structures with list_directory\n\
+             - 📖 Reading file contents with read_file\n\
+             - ✏️  Editing files by line ranges with edit_file\n\n\
+             **Workflow Guidelines:**\n\
+             1. Always read a file before editing to understand its current state\n\
+             2. Use list_directory to explore the codebase structure\n\
+             3. When using edit_file, always specify the exact line range (1-indexed, inclusive)\n\
+             4. Provide clear explanations before and after making changes\n\
+             5. Show diff-like summaries when editing code\n\n\
+             **Best Practices:**\n\
+             - Start by exploring the codebase structure\n\
+             - Read related files to understand context\n\
+             - Make targeted, well-explained edits\n\
+             - Verify changes by reading modified files\n\
+             - Always maintain code quality and consistency",
         ),
         Message::user(user_query),
     ];
 
     let mut step = 0;
-    let max_steps = 10; // Prevent infinite loops
+    let max_steps = 15; // Code editing may require more steps
 
     loop {
         if step >= max_steps {
@@ -201,19 +142,24 @@ async fn run_streaming_agent(
 
             // Execute each tool call and add results
             for (tool_id, tool_name, tool_args) in &tool_calls_to_execute {
-                let result = execute_tool(tool_name, tool_args);
+                // Execute the tool using the registry
+                let result = tool_registry
+                    .execute(tool_name, serde_json::json!(tool_args))
+                    .await;
 
                 let tool_result = match result {
                     Ok(output) => {
                         println!("   ✅ Success");
-                        if output.len() <= 200 {
-                            println!("   Result: {}", output);
+                        let output_str = serde_json::to_string_pretty(&output)
+                            .unwrap_or_else(|_| output.to_string());
+                        if output_str.len() <= 200 {
+                            println!("   Result: {}", output_str);
                         } else {
-                            println!("   Result: ({} bytes)", output.len());
+                            println!("   Result: ({} bytes)", output_str.len());
                         }
                         ContentBlock::tool_result(
                             tool_id,
-                            Some(ToolResultContent::Text(output)),
+                            Some(ToolResultContent::Text(output_str)),
                             Some(false),
                         )
                     }
@@ -257,8 +203,23 @@ async fn run_streaming_agent(
                 println!("   [Finished: {}]", reason);
             }
 
-            println!("\n✅ Streaming agent completed successfully");
-            break;
+            // Ask user if they want to continue
+            print!("\n💬 Continue? (Enter next question or 'q' to quit): ");
+            std::io::stdout().flush()?;
+
+            let mut next_input = String::new();
+            std::io::stdin().read_line(&mut next_input)?;
+            let next_input = next_input.trim();
+
+            // Check if user wants to quit
+            if next_input.eq_ignore_ascii_case("q") || next_input.eq_ignore_ascii_case("quit") {
+                println!("\n👋 Goodbye!");
+                break;
+            }
+
+            // Add new user message and continue the loop
+            messages.push(Message::user(next_input.to_string()));
+            continue;
         }
 
         // If we got here, something unexpected happened
@@ -272,11 +233,13 @@ async fn run_streaming_agent(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("╔════════════════════════════════════════════════════════════╗");
-    println!("║         🤖 Streaming Tool-Using Agent                      ║");
+    println!("║         🤖 AI Code Assistant with Editing                 ║");
     println!("║                                                            ║");
-    println!("║  This agent uses STREAMING to explore files and dirs:      ║");
-    println!("║    • list_directory - List files in a directory            ║");
-    println!("║    • read_file - Read the contents of a file               ║");
+    println!("║  An intelligent coding assistant that can:                 ║");
+    println!("║    • 📂 Explore codebase structure                         ║");
+    println!("║    • 📖 Read and analyze source files                      ║");
+    println!("║    • ✏️  Edit code with precision (line-based)              ║");
+    println!("║    • 🔄 Iterate with streaming responses                   ║");
     println!("╚════════════════════════════════════════════════════════════╝");
     println!();
 
@@ -292,12 +255,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         zai.config().model
     );
 
-    // Example queries to try:
+    // Example queries focused on code editing
     let example_queries = vec![
-        "What files are in the current directory?",
-        "Read the Cargo.toml file and tell me about this project",
-        "Explore the src directory and list all Rust source files",
-        "What's in the examples directory?",
+        "Show me the structure of the src directory",
+        "Read the Cargo.toml file and tell me the dependencies",
+        "Add a new function to examples/agent.rs that prints 'Hello, World!'",
+        "Edit the main function in examples/code_agent.rs to add better error handling",
+        "What Rust source files are in the src/tooling directory?",
+        "Read and improve the comments in src/tooling/mod.rs",
     ];
 
     println!("📝 Example queries you could ask:");
@@ -319,8 +284,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // Run the streaming agent
-    run_streaming_agent(&zai, input).await?;
+    // Run the code agent
+    run_code_agent(&zai, input).await?;
 
     Ok(())
 }

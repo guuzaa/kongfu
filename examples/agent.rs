@@ -1,88 +1,21 @@
 use kongfu::{
-    ContentBlock, FunctionDefinition, Message, Provider, RequestOptions, Tool, ToolChoice,
-    ToolResultContent, Zai,
+    ContentBlock, ListDirectory, Message, Provider, ReadFile, RequestOptions, ToolChoice,
+    ToolRegistry, ToolResultContent, Zai,
 };
-use serde_json::json;
-use std::collections::HashMap;
 use std::io::Write;
 
-/// Define available tools for the agent
-fn get_tools() -> Vec<Tool> {
-    vec![
-        Tool::Function(FunctionDefinition {
-            name: "list_directory".to_string(),
-            description:
-                "List files and directories in a given path. Use this to explore the file system."
-                    .to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "The directory path to list (default: current directory '.')"
-                    }
-                }
-            }),
-        }),
-        Tool::Function(FunctionDefinition {
-            name: "read_file".to_string(),
-            description: "Read the contents of a file. Use this to examine file contents."
-                .to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "The path to the file to read"
-                    }
-                },
-                "required": ["path"]
-            }),
-        }),
-    ]
-}
+// ============================================================================
+// Agent implementation
+// ============================================================================
 
-/// Execute a tool call and return the result
-fn execute_tool(name: &str, input: &HashMap<String, serde_json::Value>) -> Result<String, String> {
-    match name {
-        "list_directory" => {
-            let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+/// Run the agent loop with the new tool system
+async fn run_agent(
+    zai: &Zai,
+    user_query: &str,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let tool_registry = ToolRegistry::new().add(ListDirectory).add(ReadFile);
+    let tools = tool_registry.to_tools();
 
-            std::fs::read_dir(path)
-                .map(|entries| {
-                    let mut result = String::new();
-                    for entry in entries.filter_map(|e| e.ok()) {
-                        let file_name = entry.file_name().to_string_lossy().to_string();
-                        let file_type = if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                            "DIR"
-                        } else {
-                            "FILE"
-                        };
-                        result.push_str(&format!("  [{}] {}\n", file_type, file_name));
-                    }
-                    if result.is_empty() {
-                        result = "(empty directory)".to_string();
-                    }
-                    result
-                })
-                .map_err(|e| format!("Failed to list directory: {}", e))
-        }
-        "read_file" => {
-            let path = input
-                .get("path")
-                .and_then(|v| v.as_str())
-                .ok_or("Missing 'path' parameter")?;
-
-            std::fs::read_to_string(path)
-                .map_err(|e| format!("Failed to read file '{}': {}", path, e))
-        }
-        _ => Err(format!("Unknown tool: {}", name)),
-    }
-}
-
-/// Run the agent loop
-async fn run_agent(zai: &Zai, user_query: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let tools = get_tools();
     let options = RequestOptions {
         tool_choice: Some(ToolChoice::Auto),
     };
@@ -98,7 +31,7 @@ async fn run_agent(zai: &Zai, user_query: &str) -> Result<(), Box<dyn std::error
     ];
 
     let mut step = 0;
-    let max_steps = 10; // Prevent infinite loops
+    let max_steps = 10;
 
     loop {
         if step >= max_steps {
@@ -127,25 +60,30 @@ async fn run_agent(zai: &Zai, user_query: &str) -> Result<(), Box<dyn std::error
                 ContentBlock::ToolUse(tool_use) => {
                     has_tool_calls = true;
                     println!("\n🔧 Tool Call: {}", tool_use.name);
-                    if let Some(params) = serde_json::to_string_pretty(&tool_use.input).ok() {
+
+                    if let Ok(params) = serde_json::to_string_pretty(&tool_use.input) {
                         println!("   Parameters: {}", params);
                     }
 
-                    // Execute the tool
-                    let result = execute_tool(&tool_use.name, &tool_use.input);
+                    // Execute the tool using the registry
+                    let result = tool_registry
+                        .execute(&tool_use.name, serde_json::json!(tool_use.input))
+                        .await;
 
                     // Prepare the tool result message
                     let tool_result = match result {
                         Ok(output) => {
                             println!("   ✅ Success");
-                            if output.len() <= 200 {
-                                println!("   Result: {}", output);
+                            let output_str = serde_json::to_string_pretty(&output)
+                                .unwrap_or_else(|_| output.to_string());
+                            if output_str.len() <= 200 {
+                                println!("   Result: {}", output_str);
                             } else {
-                                println!("   Result: ({} bytes)", output.len());
+                                println!("   Result: ({} bytes)", output_str.len());
                             }
                             ContentBlock::tool_result(
                                 &tool_use.id,
-                                Some(ToolResultContent::Text(output)),
+                                Some(ToolResultContent::Text(output_str)),
                                 Some(false),
                             )
                         }
@@ -192,13 +130,14 @@ async fn run_agent(zai: &Zai, user_query: &str) -> Result<(), Box<dyn std::error
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     println!("╔════════════════════════════════════════════════════════════╗");
-    println!("║              🤖 Simple Tool-Using Agent                    ║");
+    println!("║     🤖 Agent with Type-Safe Tool System                    ║");
     println!("║                                                            ║");
-    println!("║  This agent can explore files and directories using:       ║");
-    println!("║    • list_directory - List files in a directory            ║");
-    println!("║    • read_file - Read the contents of a file               ║");
+    println!("║  Demonstrates the new ToolHandler + ToolParams system:     ║");
+    println!("║    • Type-safe parameters with validation                  ║");
+    println!("║    • Auto-generated JSON schemas                           ║");
+    println!("║    • Clean separation of tool logic                         ║");
     println!("╚════════════════════════════════════════════════════════════╝");
     println!();
 

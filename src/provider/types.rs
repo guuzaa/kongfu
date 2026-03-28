@@ -19,9 +19,9 @@ pub struct ModelConfig {
     pub model: String,
     pub base_url: String,
     pub api_key: String,
-    pub temperature: f32,
+    pub temperature: f64,
     pub max_tokens: Option<u32>,
-    pub top_p: Option<f32>,
+    pub top_p: Option<f64>,
 }
 
 impl Default for ModelConfig {

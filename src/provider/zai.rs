@@ -11,17 +11,57 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::pin::Pin;
 
+struct ZaiClient {
+    http: reqwest::Client,
+    api_key: String,
+    base_url: String,
+}
+
+impl ZaiClient {
+    fn new(api_key: String, base_url: String) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            api_key,
+            base_url,
+        }
+    }
+
+    fn endpoint(&self, path: &str) -> String {
+        format!("{}/{}", self.base_url, path)
+    }
+
+    async fn post(&self, path: &str, body: &serde_json::Value) -> Result<reqwest::Response> {
+        let response = self
+            .http
+            .post(self.endpoint(path))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| KongfuError::ExecutionError(format!("Zai API request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(KongfuError::ExecutionError(format!(
+                "Zai API error: {}",
+                error_text
+            )));
+        }
+
+        Ok(response)
+    }
+}
+
 pub struct Zai {
     config: ModelConfig,
-    client: reqwest::Client,
+    client: ZaiClient,
 }
 
 impl Zai {
     pub fn new(config: ModelConfig) -> Self {
-        Self {
-            config,
-            client: reqwest::Client::new(),
-        }
+        let client = ZaiClient::new(config.api_key.clone(), config.base_url.clone());
+        Self { config, client }
     }
 
     pub fn builder() -> ZaiBuilder {
@@ -31,6 +71,36 @@ impl Zai {
     pub fn config(&self) -> &ModelConfig {
         &self.config
     }
+
+    fn build_request_body(
+        &self,
+        messages: &[Message],
+        tools: Option<&[Tool]>,
+        options: &RequestOptions,
+        stream: bool,
+    ) -> serde_json::Value {
+        let mut body = json!({
+            "model": self.config.model,
+            "messages": messages,
+            "temperature": self.config.temperature,
+            "stream": stream,
+        });
+
+        if let Some(max_tokens) = self.config.max_tokens {
+            body["max_tokens"] = json!(max_tokens);
+        }
+        if let Some(top_p) = self.config.top_p {
+            body["top_p"] = json!(top_p);
+        }
+        if let Some(tool_choice) = &options.tool_choice {
+            body["tool_choice"] = json!(tool_choice);
+        }
+        if let Some(tools) = tools {
+            body["tools"] = json!(tools);
+        }
+
+        body
+    }
 }
 
 #[derive(Default)]
@@ -38,9 +108,9 @@ pub struct ZaiBuilder {
     model: Option<String>,
     api_key: Option<String>,
     base_url: Option<String>,
-    temperature: Option<f32>,
+    temperature: Option<f64>,
     max_tokens: Option<u32>,
-    top_p: Option<f32>,
+    top_p: Option<f64>,
 }
 
 impl ZaiBuilder {
@@ -63,7 +133,7 @@ impl ZaiBuilder {
         self
     }
 
-    pub fn temperature(mut self, temperature: f32) -> Self {
+    pub fn temperature(mut self, temperature: f64) -> Self {
         self.temperature = Some(temperature);
         self
     }
@@ -73,7 +143,7 @@ impl ZaiBuilder {
         self
     }
 
-    pub fn top_p(mut self, top_p: f32) -> Self {
+    pub fn top_p(mut self, top_p: f64) -> Self {
         self.top_p = Some(top_p);
         self
     }
@@ -102,10 +172,9 @@ impl ZaiBuilder {
             top_p: self.top_p,
         };
 
-        Ok(Zai {
-            config,
-            client: reqwest::Client::new(),
-        })
+        let client = ZaiClient::new(config.api_key.clone(), config.base_url.clone());
+
+        Ok(Zai { config, client })
     }
 }
 
@@ -475,45 +544,8 @@ impl Provider for Zai {
         tools: Option<&[Tool]>,
         options: &RequestOptions,
     ) -> Result<ModelResponse> {
-        let url = format!("{}/chat/completions", self.config.base_url);
-
-        let mut body = json!({
-            "model": self.config.model,
-            "messages": messages,
-            "temperature": self.config.temperature,
-            "stream": false,
-        });
-
-        if let Some(max_tokens) = self.config.max_tokens {
-            body["max_tokens"] = json!(max_tokens);
-        }
-        if let Some(top_p) = self.config.top_p {
-            body["top_p"] = json!(top_p);
-        }
-        if let Some(tool_choice) = &options.tool_choice {
-            body["tool_choice"] = json!(tool_choice);
-        }
-        if let Some(tools) = tools {
-            body["tools"] = json!(tools);
-        }
-
-        let response = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.config.api_key))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| KongfuError::ExecutionError(format!("Zai API request failed: {}", e)))?;
-
-        if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(KongfuError::ExecutionError(format!(
-                "Zai API error: {}",
-                error_text
-            )));
-        }
+        let body = self.build_request_body(messages, tools, options, false);
+        let response = self.client.post("chat/completions", &body).await?;
 
         let api_response: ZaiResponse = response.json().await.map_err(|e| {
             KongfuError::ExecutionError(format!("Failed to parse Zai response: {}", e))
@@ -531,45 +563,8 @@ impl StreamingProvider for Zai {
         tools: Option<&[Tool]>,
         options: &RequestOptions,
     ) -> Result<Box<dyn futures::Stream<Item = Result<StreamingUpdate>> + Unpin + Send>> {
-        let url = format!("{}/chat/completions", self.config.base_url);
-
-        let mut body = json!({
-            "model": self.config.model,
-            "messages": messages,
-            "temperature": self.config.temperature,
-            "stream": true,
-        });
-
-        if let Some(max_tokens) = self.config.max_tokens {
-            body["max_tokens"] = json!(max_tokens);
-        }
-        if let Some(top_p) = self.config.top_p {
-            body["top_p"] = json!(top_p);
-        }
-        if let Some(tool_choice) = &options.tool_choice {
-            body["tool_choice"] = json!(tool_choice);
-        }
-        if let Some(tools) = tools {
-            body["tools"] = json!(tools);
-        }
-
-        let response = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.config.api_key))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| KongfuError::ExecutionError(format!("Zai API request failed: {}", e)))?;
-
-        if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(KongfuError::ExecutionError(format!(
-                "Zai API error: {}",
-                error_text
-            )));
-        }
+        let body = self.build_request_body(messages, tools, options, true);
+        let response = self.client.post("chat/completions", &body).await?;
 
         let byte_stream = response.bytes_stream();
         let stream = ZaiResponseStream::new(byte_stream, self.config.model.clone());
@@ -788,5 +783,75 @@ mod tests {
                 .any(|block| matches!(block, ContentBlock::ToolUse(_)));
             assert!(has_tool_use, "Response should contain tool use blocks");
         }
+    }
+
+    #[test]
+    fn test_build_request_body() {
+        let zai = Zai::builder()
+            .api_key("test-key")
+            .base_url("https://api.test.com")
+            .model("test-model")
+            .temperature(0.7)
+            .max_tokens(1000)
+            .top_p(0.9)
+            .build()
+            .unwrap();
+
+        let messages = vec![Message::user("Hello")];
+        let tools = vec![Tool::Function(crate::provider::types::FunctionDefinition {
+            name: "test_tool".to_string(),
+            description: "A test tool".to_string(),
+            parameters: serde_json::json!({"type": "object"}),
+        })];
+        let options = RequestOptions {
+            tool_choice: Some(ToolChoice::Auto),
+        };
+
+        // Test with stream=false
+        let body = zai.build_request_body(&messages, Some(&tools), &options, false);
+
+        assert_eq!(body["model"], "test-model");
+        assert_eq!(body["stream"], false);
+        assert_eq!(body["temperature"].as_f64().unwrap(), 0.7);
+        assert_eq!(body["max_tokens"], 1000);
+        assert_eq!(body["top_p"].as_f64().unwrap(), 0.9);
+        assert!(body["tool_choice"].is_string());
+        assert!(body["tools"].is_array());
+        assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+
+        // Test with stream=true
+        let body_stream = zai.build_request_body(&messages, None, &options, true);
+        assert_eq!(body_stream["stream"], true);
+
+        // Test without optional parameters
+        let zai_minimal = Zai::builder().api_key("test-key").build().unwrap();
+
+        let body_minimal = zai_minimal.build_request_body(
+            &messages,
+            None,
+            &RequestOptions { tool_choice: None },
+            false,
+        );
+
+        assert_eq!(body_minimal["model"], "gpt-4");
+        assert!((body_minimal["temperature"].as_f64().unwrap() - 0.7).abs() < 0.01);
+        assert!(body_minimal.get("max_tokens").is_none());
+        assert!(body_minimal.get("top_p").is_none());
+        assert!(body_minimal.get("tool_choice").is_none());
+        assert!(body_minimal.get("tools").is_none());
+    }
+
+    #[test]
+    fn test_zai_client_endpoint() {
+        let client = ZaiClient::new(
+            "test-key".to_string(),
+            "https://api.test.com/v1".to_string(),
+        );
+
+        assert_eq!(
+            client.endpoint("chat/completions"),
+            "https://api.test.com/v1/chat/completions"
+        );
+        assert_eq!(client.endpoint("models"), "https://api.test.com/v1/models");
     }
 }

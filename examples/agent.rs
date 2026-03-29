@@ -1,149 +1,19 @@
-use kongfu::tooling::{ListDirectory, ReadFile, ToolRegistry};
-use kongfu::{
-    ContentBlock, Message, Provider, RequestOptions, ToolChoice, ToolResultContent,
-    provider::Ollama,
-};
+use kongfu::provider::Ollama;
+use kongfu::tooling::{ListDirectory, ReadFile};
+use kongfu::{Agent, Provider};
 use std::io::Write;
 
-// ============================================================================
-// Agent implementation
-// ============================================================================
-
-/// Run the agent loop with the new tool system
-async fn run_agent(
-    provider: &dyn Provider,
-    messages: &mut Vec<Message>,
-) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let tool_registry = ToolRegistry::new().add(ListDirectory).add(ReadFile);
-    let tools = tool_registry.to_tools();
-
-    let options = RequestOptions {
-        tool_choice: Some(ToolChoice::Auto),
-    };
-
-    let mut step = 0;
-    let max_steps = 10;
-
-    loop {
-        if step >= max_steps {
-            println!("\n⚠️  Maximum steps ({}) reached, stopping.", max_steps);
-            break;
-        }
-
-        step += 1;
-        println!("\n--- Step {} ---", step);
-
-        // Call the LLM
-        let response = provider.generate(&messages, Some(&tools), &options).await?;
-
-        // Process all content blocks
-        let mut has_tool_calls = false;
-        let mut final_text = String::new();
-
-        // First pass: separate content into tool_use blocks vs other content
-        let tool_use_blocks: Vec<_> = response
-            .content
-            .iter()
-            .filter(|b| match b {
-                ContentBlock::ToolUse(_) => true,
-                ContentBlock::Thinking(thinking) => {
-                    println!("\n🤔 Thinking: {}", thinking.thinking);
-                    false
-                }
-                ContentBlock::Text(text) => {
-                    final_text = text.text.clone();
-                    false
-                }
-                _ => false,
-            })
-            .cloned()
-            .collect();
-
-        // Build one assistant message with all tool_use blocks
-        if !tool_use_blocks.is_empty() {
-            has_tool_calls = true;
-            let assistant_msg = tool_use_blocks
-                .iter()
-                .fold(Message::assistant(ContentBlock::text("")), |msg, block| {
-                    msg.push(block.clone())
-                });
-            messages.push(assistant_msg);
-
-            // Execute each tool and add result messages
-            for block in tool_use_blocks {
-                if let ContentBlock::ToolUse(tool_use) = block {
-                    println!("\n🔧 Tool Call: {}", tool_use.name);
-
-                    // Execute the tool using the registry
-                    let result = tool_registry
-                        .execute(&tool_use.name, serde_json::json!(tool_use.input))
-                        .await;
-
-                    // Prepare the tool result message
-                    let tool_result = match result {
-                        Ok(output) => {
-                            // Convert Value to appropriate string representation
-                            let output_str = if output.is_string() {
-                                // Extract string content directly
-                                output.as_str().unwrap_or(&output.to_string()).to_string()
-                            } else {
-                                // For non-string values, format as JSON
-                                serde_json::to_string_pretty(&output)
-                                    .unwrap_or_else(|_| output.to_string())
-                            };
-                            if output_str.len() <= 200 {
-                                println!("   Tool Result: {}", output_str);
-                            } else {
-                                println!("   Tool Result: ({} bytes)", output_str.len());
-                            }
-                            ContentBlock::tool_result(
-                                &tool_use.id,
-                                Some(ToolResultContent::Text(output_str)),
-                                Some(false),
-                            )
-                        }
-                        Err(error) => {
-                            println!("   ❌ Error: {}", error);
-                            ContentBlock::tool_result(
-                                &tool_use.id,
-                                Some(ToolResultContent::Text(error)),
-                                Some(true),
-                            )
-                        }
-                    };
-
-                    // Add tool result message
-                    messages.push(Message::tool(tool_result));
-                }
-            }
-        }
-
-        // If there were tool calls, continue the loop
-        if has_tool_calls {
-            continue;
-        }
-
-        // If we have text and no tool calls, we're done with this turn
-        if !final_text.is_empty() {
-            println!("\n🤖 Assistant: {}", final_text);
-            // Add the assistant's response to messages
-            messages.push(Message::assistant(final_text));
-        }
-        break;
-    }
-
-    Ok(())
-}
-
 #[tokio::main]
-async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("╔════════════════════════════════════════════════════════════╗");
     println!("║     🤖 Agent with Type-Safe Tool System                    ║");
     println!("║                                                            ║");
-    println!("║  Demonstrates the new ToolHandler + ToolParams system:     ║");
+    println!("║  Demonstrates the new Agent abstraction:                   ║");
+    println!("║    • Clean builder pattern                                 ║");
     println!("║    • Type-safe parameters with validation                  ║");
     println!("║    • Auto-generated JSON schemas                           ║");
-    println!("║    • Clean separation of tool logic                         ║");
+    println!("║    • Concurrent tool execution                             ║");
+    println!("║    • Built-in memory management                            ║");
     println!("╚════════════════════════════════════════════════════════════╝");
     println!();
 
@@ -159,13 +29,19 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         client.config().model
     );
 
-    // Initialize conversation with system message
-    let mut messages = vec![Message::system(
-        "You are a helpful AI assistant with access to tools. \
+    // Create an agent with the new builder pattern
+    let mut agent = Agent::builder(client)
+        .system_prompt(
+            "You are a helpful AI assistant with access to tools. \
              When you need to explore the file system or read files, use the available tools. \
              Always explain what you're doing before using a tool. \
              After getting tool results, provide a clear summary of what you found.",
-    )];
+        )
+        .tool(ListDirectory)
+        .tool(ReadFile)
+        .max_steps(10)
+        .memory_limit(50)
+        .build();
 
     // Example queries to try:
     let example_queries = vec![
@@ -200,12 +76,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             }
             "clear" => {
                 println!("\n🗑️  Conversation history cleared");
-                messages = vec![Message::system(
-                    "You are a helpful AI assistant with access to tools. \
-                         When you need to explore the file system or read files, use the available tools. \
-                         Always explain what you're doing before using a tool. \
-                         After getting tool results, provide a clear summary of what you found.",
-                )];
+                agent.clear().await?;
                 continue;
             }
             "" => {
@@ -215,14 +86,20 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             _ => {}
         }
 
-        // Add user message to conversation history
-        messages.push(Message::user(input));
-
         // Run the agent for this turn
-        if let Err(e) = run_agent(&client, &mut messages).await {
-            println!("\n❌ Error: {}", e);
-            // Remove the last user message if there was an error
-            messages.pop();
+        println!("\n🤖 Agent:");
+        match agent.run(input).await {
+            Ok(response) => {
+                println!("\n{}", response.text);
+                println!(
+                    "\n📊 Stats: {} steps, {} tokens",
+                    response.steps_taken,
+                    response.usage.map_or(0, |u| u.total_tokens)
+                );
+            }
+            Err(e) => {
+                println!("\n❌ Error: {}", e);
+            }
         }
     }
 

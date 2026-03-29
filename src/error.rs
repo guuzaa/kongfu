@@ -31,6 +31,9 @@ pub enum KongfuError {
 
     #[error("Execution error: {0}")]
     ExecutionError(String),
+
+    #[error("Maximum steps ({0}) exceeded")]
+    MaxStepsExceeded(usize),
 }
 
 pub type Result<T> = std::result::Result<T, KongfuError>;

@@ -143,7 +143,7 @@ where
 /// # Example
 ///
 /// ```rust,ignore
-/// use kongfu::{ToolRegistry, ToolHandler};
+/// use kongfu::tooling::{ToolRegistry, ToolHandler};
 ///
 /// let tools = ToolRegistry::new()
 ///     .add(ListDirectory)
@@ -153,9 +153,9 @@ where
 /// // Convert to LLM API format
 /// let definitions = tools.to_definitions();
 /// ```
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ToolRegistry {
-    tools: Vec<Box<dyn ToolHandlerWrapper>>,
+    tools: Vec<std::sync::Arc<dyn ToolHandlerWrapper>>,
 }
 
 // Wrapper trait to allow dynamic dispatch of different ToolHandler types
@@ -211,8 +211,8 @@ impl ToolRegistry {
     where
         H: ToolHandler + 'static,
     {
-        let boxed: Box<dyn ToolHandlerWrapper> = Box::new(tool);
-        self.tools.push(boxed);
+        let arc: std::sync::Arc<dyn ToolHandlerWrapper> = std::sync::Arc::new(tool);
+        self.tools.push(arc);
         self
     }
 

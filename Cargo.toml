@@ -10,6 +10,7 @@ description = "An LLM abstraction layer for AI agent applications"
 
 [dependencies]
 kongfu-macros = { path = "kongfu-macros" }
+async-stream = "0.3.6"
 async-trait = "0.1.89"
 bytes = "1.11"
 futures = "0.3.32"
@@ -19,6 +20,7 @@ serde = {version = "1.0.228", features = ["derive"]}
 serde_json = "1.0.149"
 thiserror = "2.0.18"
 tokio = { version = "1.50.0", features = ["full"] }
+tokio-stream = "0.1"
 uuid = {version = "1.23.0", features = ["v4", "serde"]}
 
 [dev-dependencies]

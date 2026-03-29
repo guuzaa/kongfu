@@ -1,3 +1,4 @@
+mod agent;
 mod error;
 mod memory;
 mod message;
@@ -15,3 +16,5 @@ pub use provider::{
 };
 
 pub use tooling::ToolParams;
+
+pub use agent::{Agent, AgentBuilder, AgentEvent, AgentResponse, StreamingAgent};

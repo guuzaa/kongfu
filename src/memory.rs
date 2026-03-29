@@ -17,15 +17,17 @@ pub trait Memory: Send + Sync {
 
 #[derive(Debug, Clone, Default)]
 pub struct MemoryStore {
-    messages: Arc<RwLock<VecDeque<Message>>>,
+    pub(crate) messages: Arc<RwLock<VecDeque<Message>>>,
     max_size: Option<usize>,
 }
 
 impl MemoryStore {
     pub fn new() -> Self {
-        Self {
-            ..Default::default()
-        }
+        Default::default()
+    }
+
+    pub async fn is_empty(&self) -> bool {
+        self.messages.read().await.is_empty()
     }
 
     pub fn with_max_size(max_size: usize) -> Self {
@@ -85,6 +87,7 @@ mod tests {
         store.add(Message::system("system prompt")).await.unwrap();
         store.add(Message::user("user query")).await.unwrap();
         store.add(Message::user("tool calling")).await.unwrap();
+        assert!(!store.is_empty().await);
 
         let messages = store.get_all().await.unwrap();
         assert_eq!(3, messages.len());

@@ -98,17 +98,15 @@ impl OllamaClient {
             .json(body)
             .send()
             .await
-            .map_err(|e| {
-                KongfuError::ExecutionError(format!("Ollama API request failed: {}", e))
-            })?;
+            .map_err(|e| KongfuError::NetworkError(format!("Ollama API request failed: {}", e)))?;
 
         if !response.status().is_success() {
             let code = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
-            return Err(KongfuError::ExecutionError(format!(
-                "Ollama API error {}: {}",
-                code, error_text
-            )));
+            return Err(KongfuError::ApiError {
+                status: code,
+                message: error_text,
+            });
         }
 
         Ok(response)
@@ -305,19 +303,30 @@ struct OllamaStreamChunk {
 }
 
 /// Convert Ollama tool calls to standard ContentBlock format
-fn convert_tool_calls(tool_calls: &[OllamaToolCall]) -> Vec<ContentBlock> {
+fn convert_tool_calls(tool_calls: &[OllamaToolCall]) -> Result<Vec<ContentBlock>> {
     tool_calls
         .iter()
         .map(|tool_call| {
             let args_map: HashMap<String, serde_json::Value> =
                 if tool_call.function.arguments.is_object() {
-                    serde_json::from_value(tool_call.function.arguments.clone())
-                        .unwrap_or_else(|_| HashMap::new())
+                    serde_json::from_value(tool_call.function.arguments.clone()).map_err(|e| {
+                        KongfuError::ResponseParseError(format!(
+                            "Failed to parse tool call arguments: {}",
+                            e
+                        ))
+                    })?
                 } else if tool_call.function.arguments.is_string() {
                     serde_json::from_str(tool_call.function.arguments.as_str().unwrap_or("{}"))
-                        .unwrap_or_else(|_| HashMap::new())
+                        .map_err(|e| {
+                            KongfuError::ResponseParseError(format!(
+                                "Failed to parse tool call arguments: {}",
+                                e
+                            ))
+                        })?
                 } else {
-                    HashMap::new()
+                    return Err(KongfuError::ResponseParseError(
+                        "Tool call arguments must be an object or string".to_string(),
+                    ));
                 };
 
             let tool_id = if tool_call.id.is_empty() {
@@ -326,11 +335,11 @@ fn convert_tool_calls(tool_calls: &[OllamaToolCall]) -> Vec<ContentBlock> {
                 tool_call.id.clone()
             };
 
-            ContentBlock::ToolUse(ToolUseBlock::new(
+            Ok(ContentBlock::ToolUse(ToolUseBlock::new(
                 tool_id,
                 tool_call.function.name.clone(),
                 args_map,
-            ))
+            )))
         })
         .collect()
 }
@@ -373,7 +382,7 @@ impl TryFrom<OllamaResponse> for ModelResponse {
         }
 
         if let Some(tool_calls) = &response.message.tool_calls {
-            content_blocks.extend(convert_tool_calls(tool_calls));
+            content_blocks.extend(convert_tool_calls(tool_calls)?);
         }
 
         ensure_content_not_empty(&mut content_blocks);
@@ -437,7 +446,11 @@ impl OllamaResponseStream {
                     }
 
                     // Convert Ollama tool calls to standard format
-                    content_blocks.extend(convert_tool_calls(&self.tool_calls));
+                    let tool_calls_content = convert_tool_calls(&self.tool_calls);
+                    match tool_calls_content {
+                        Ok(calls) => content_blocks.extend(calls),
+                        Err(e) => return Some(Err(e)),
+                    }
 
                     ensure_content_not_empty(&mut content_blocks);
 
@@ -502,7 +515,7 @@ impl OllamaResponseStream {
 
                 None
             }
-            Err(e) => Some(Err(KongfuError::ExecutionError(format!(
+            Err(e) => Some(Err(KongfuError::ResponseParseError(format!(
                 "Failed to parse stream chunk: {}",
                 e
             )))),
@@ -548,7 +561,7 @@ impl futures::Stream for OllamaResponseStream {
                 std::task::Poll::Pending
             }
             std::task::Poll::Ready(Some(Err(e))) => std::task::Poll::Ready(Some(Err(
-                KongfuError::ExecutionError(format!("Stream error: {}", e)),
+                KongfuError::StreamError(format!("Stream error: {}", e)),
             ))),
             std::task::Poll::Ready(None) => std::task::Poll::Ready(None),
             std::task::Poll::Pending => std::task::Poll::Pending,
@@ -572,7 +585,7 @@ impl Provider for Ollama {
         let response = self.client.post("api/chat", &body).await?;
 
         let api_response: OllamaResponse = response.json().await.map_err(|e| {
-            KongfuError::ExecutionError(format!("Failed to parse Ollama response: {}", e))
+            KongfuError::ResponseParseError(format!("Failed to parse Ollama response: {}", e))
         })?;
 
         Ok(api_response.try_into()?)

@@ -11,7 +11,7 @@ pub use message::{
 
 pub use provider::{
     Capabilities, FunctionDefinition, Model, ModelConfig, ModelResponse, Provider, ProviderName,
-    RequestOptions, StreamingProvider, StreamingUpdate, Usage, ToolChoice
+    RequestOptions, StreamingProvider, StreamingUpdate, ToolChoice, Usage,
 };
 
 pub use tooling::ToolParams;

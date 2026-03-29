@@ -39,14 +39,15 @@ impl ZaiClient {
             .json(body)
             .send()
             .await
-            .map_err(|e| KongfuError::ExecutionError(format!("Zai API request failed: {}", e)))?;
+            .map_err(|e| KongfuError::NetworkError(format!("Zai API request failed: {}", e)))?;
 
         if !response.status().is_success() {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
-            return Err(KongfuError::ExecutionError(format!(
-                "Zai API error: {}",
-                error_text
-            )));
+            return Err(KongfuError::ApiError {
+                status,
+                message: error_text,
+            });
         }
 
         Ok(response)
@@ -152,7 +153,7 @@ impl ZaiBuilder {
         let api_key = self
             .api_key
             .or_else(|| std::env::var("ZAI_API_KEY").ok())
-            .ok_or_else(|| KongfuError::ExecutionError(
+            .ok_or_else(|| KongfuError::InvalidConfig(
                 "api_key is required. Set it via ZaiBuilder::api_key() or ZAI_API_KEY environment variable".to_string()
             ))?;
 
@@ -305,7 +306,7 @@ impl TryFrom<ZaiResponse> for ModelResponse {
             for tool_call in tool_calls {
                 let args_map: HashMap<String, serde_json::Value> =
                     serde_json::from_str(&tool_call.function.arguments).map_err(|e| {
-                        KongfuError::ExecutionError(format!(
+                        KongfuError::ResponseParseError(format!(
                             "Failed to parse tool call arguments: {}",
                             e
                         ))
@@ -390,7 +391,7 @@ impl ZaiResponseStream {
                     match serde_json::from_str(&tool_call.function.arguments) {
                         Ok(map) => map,
                         Err(e) => {
-                            return Some(Err(KongfuError::ExecutionError(format!(
+                            return Some(Err(KongfuError::ResponseParseError(format!(
                                 "Failed to parse tool call arguments: {}",
                                 e
                             ))));
@@ -481,7 +482,7 @@ impl ZaiResponseStream {
                 }
                 None
             }
-            Err(e) => Some(Err(KongfuError::ExecutionError(format!(
+            Err(e) => Some(Err(KongfuError::ResponseParseError(format!(
                 "Failed to parse SSE chunk: {}",
                 e
             )))),
@@ -524,7 +525,7 @@ impl futures::Stream for ZaiResponseStream {
                 std::task::Poll::Pending
             }
             std::task::Poll::Ready(Some(Err(e))) => std::task::Poll::Ready(Some(Err(
-                KongfuError::ExecutionError(format!("Stream error: {}", e)),
+                KongfuError::StreamError(format!("Stream error: {}", e)),
             ))),
             std::task::Poll::Ready(None) => std::task::Poll::Ready(None),
             std::task::Poll::Pending => std::task::Poll::Pending,
@@ -548,7 +549,7 @@ impl Provider for Zai {
         let response = self.client.post("chat/completions", &body).await?;
 
         let api_response: ZaiResponse = response.json().await.map_err(|e| {
-            KongfuError::ExecutionError(format!("Failed to parse Zai response: {}", e))
+            KongfuError::ResponseParseError(format!("Failed to parse Zai response: {}", e))
         })?;
 
         Ok(api_response.try_into()?)

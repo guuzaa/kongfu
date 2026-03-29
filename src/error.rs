@@ -17,7 +17,19 @@ pub enum KongfuError {
     #[error("Serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
 
-    #[error("Kongfu execution error: {0}")]
+    #[error("Network request failed: {0}")]
+    NetworkError(String),
+
+    #[error("API error (status {status}): {message}")]
+    ApiError { status: u16, message: String },
+
+    #[error("Failed to parse response: {0}")]
+    ResponseParseError(String),
+
+    #[error("Stream error: {0}")]
+    StreamError(String),
+
+    #[error("Execution error: {0}")]
     ExecutionError(String),
 }
 

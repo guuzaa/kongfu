@@ -40,16 +40,38 @@ async fn run_agent(
         let mut has_tool_calls = false;
         let mut final_text = String::new();
 
-        for block in &response.content {
-            match block {
+        // First pass: separate content into tool_use blocks vs other content
+        let tool_use_blocks: Vec<_> = response
+            .content
+            .iter()
+            .filter(|b| match b {
+                ContentBlock::ToolUse(_) => true,
                 ContentBlock::Thinking(thinking) => {
                     println!("\n🤔 Thinking: {}", thinking.thinking);
+                    false
                 }
                 ContentBlock::Text(text) => {
                     final_text = text.text.clone();
+                    false
                 }
-                ContentBlock::ToolUse(tool_use) => {
-                    has_tool_calls = true;
+                _ => false,
+            })
+            .cloned()
+            .collect();
+
+        // Build one assistant message with all tool_use blocks
+        if !tool_use_blocks.is_empty() {
+            has_tool_calls = true;
+            let assistant_msg = tool_use_blocks
+                .iter()
+                .fold(Message::assistant(ContentBlock::text("")), |msg, block| {
+                    msg.push(block.clone())
+                });
+            messages.push(assistant_msg);
+
+            // Execute each tool and add result messages
+            for block in tool_use_blocks {
+                if let ContentBlock::ToolUse(tool_use) = block {
                     println!("\n🔧 Tool Call: {}", tool_use.name);
 
                     // Execute the tool using the registry
@@ -90,14 +112,8 @@ async fn run_agent(
                         }
                     };
 
-                    // Add assistant message with the tool_use block
-                    messages.push(Message::assistant(block.clone()));
-
                     // Add tool result message
                     messages.push(Message::tool(tool_result));
-                }
-                ContentBlock::ToolResult(_) => {
-                    println!("\n⚠️  Unexpected tool result in response");
                 }
             }
         }

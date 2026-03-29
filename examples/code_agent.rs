@@ -134,12 +134,14 @@ async fn run_code_agent(zai: &Zai, user_query: &str) -> Result<(), Box<dyn std::
 
         // Execute tool calls if any
         if has_tool_calls {
-            // Add all tool_use blocks as separate assistant messages
-            for block in &current_message_blocks {
-                if let ContentBlock::ToolUse(_) = block {
-                    messages.push(Message::assistant(block.clone()));
-                }
-            }
+            // Build one assistant message with all tool-use blocks
+            let assistant_msg = current_message_blocks
+                .iter()
+                .filter(|b| matches!(b, ContentBlock::ToolUse(_)))
+                .fold(Message::assistant(ContentBlock::text("")), |msg, block| {
+                    msg.push(block.clone())
+                });
+            messages.push(assistant_msg);
 
             // Execute each tool call and add results
             for (tool_id, tool_name, tool_args) in &tool_calls_to_execute {
@@ -196,9 +198,13 @@ async fn run_code_agent(zai: &Zai, user_query: &str) -> Result<(), Box<dyn std::
             }
 
             // Add assistant response to history
-            for block in &response.content {
-                messages.push(Message::assistant(block.clone()));
-            }
+            let assistant_msg = response
+                .content
+                .iter()
+                .fold(Message::assistant(ContentBlock::text("")), |msg, block| {
+                    msg.push(block.clone())
+                });
+            messages.push(assistant_msg);
 
             if let Some(reason) = &response.finish_reason {
                 println!("   [Finished: {}]", reason);

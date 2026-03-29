@@ -133,7 +133,14 @@ impl ContentBlock {
         match self {
             ContentBlock::Text(block) => Some(block.text.clone()),
             ContentBlock::Thinking(block) => Some(block.thinking.clone()),
-            _ => None,
+            ContentBlock::ToolResult(result) => match &result.content {
+                Some(ToolResultContent::Text(s)) => Some(s.clone()),
+                Some(ToolResultContent::Objects(objs)) => {
+                    Some(serde_json::to_string(objs).unwrap_or_default())
+                }
+                None => Some(String::new()),
+            },
+            ContentBlock::ToolUse(_) => None,
         }
     }
 }
@@ -153,7 +160,7 @@ impl From<&str> for ContentBlock {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Message {
     pub role: Role,
-    pub content: ContentBlock,
+    pub content: Vec<ContentBlock>,
 }
 
 impl serde::Serialize for Message {
@@ -166,14 +173,10 @@ impl serde::Serialize for Message {
         let mut map = serializer.serialize_map(None)?;
         map.serialize_entry("role", &self.role)?;
 
-        match &self.content {
-            ContentBlock::Text(TextBlock { text }) => {
-                map.serialize_entry("content", text)?;
-            }
-            ContentBlock::Thinking(ThinkingBlock { thinking }) => {
-                map.serialize_entry("content", thinking)?;
-            }
-            ContentBlock::ToolUse(tool_use) => {
+        // Handle different content configurations
+        match self.content.as_slice() {
+            [ContentBlock::ToolUse(tool_use)] => {
+                // Single tool_use block - use tool_calls format
                 let function_call = serde_json::json!({
                     "name": tool_use.name,
                     "arguments": serde_json::to_string(&tool_use.input).unwrap_or_default()
@@ -187,13 +190,23 @@ impl serde::Serialize for Message {
                     })],
                 )?;
             }
-            ContentBlock::ToolResult(result) => {
+            [ContentBlock::ToolResult(result)] => {
+                // Single tool_result block - use tool_call_id format
                 map.serialize_entry("tool_call_id", &result.tool_use_id)?;
                 let content_str = match &result.content {
                     Some(ToolResultContent::Text(s)) => s.as_str(),
                     Some(ToolResultContent::Objects(_)) | None => "",
                 };
                 map.serialize_entry("content", content_str)?;
+            }
+            blocks => {
+                // Empty, single text/thinking, or multiple blocks
+                let content_text = blocks
+                    .iter()
+                    .filter_map(|block| block.as_text())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                map.serialize_entry("content", &content_text)?;
             }
         }
 
@@ -202,29 +215,29 @@ impl serde::Serialize for Message {
 }
 
 impl Message {
-    pub fn new(role: Role, content: ContentBlock) -> Self {
+    pub fn new(role: Role, content: Vec<ContentBlock>) -> Self {
         Self { role, content }
     }
 
     pub fn system(content: impl Into<ContentBlock>) -> Self {
-        Self::new(Role::System, content.into())
+        Self::new(Role::System, vec![content.into()])
     }
 
     pub fn user(content: impl Into<ContentBlock>) -> Self {
-        Self::new(Role::User, content.into())
+        Self::new(Role::User, vec![content.into()])
     }
 
     pub fn assistant(content: impl Into<ContentBlock>) -> Self {
-        Self::new(Role::Assistant, content.into())
+        Self::new(Role::Assistant, vec![content.into()])
     }
 
     pub fn tool(content: impl Into<ContentBlock>) -> Self {
-        Self::new(Role::Tool, content.into())
+        Self::new(Role::Tool, vec![content.into()])
     }
 
-    /// Replace current block with new one
-    pub fn insert(mut self, block: ContentBlock) -> Self {
-        self.content = block;
+    /// Add a block to the same message
+    pub fn push(mut self, block: impl Into<ContentBlock>) -> Self {
+        self.content.push(block.into());
         self
     }
 }
@@ -236,17 +249,28 @@ mod tests {
 
     #[test]
     fn test_message_ctor() {
+        // Single block - backward compatible
         let msg = Message::system("content");
-        assert!(matches!(msg.content, ContentBlock::Text(_)));
+        assert_eq!(msg.content.len(), 1);
+        assert!(matches!(msg.content[0], ContentBlock::Text(_)));
 
         let msg = Message::assistant("assistant content");
-        assert!(matches!(msg.content, ContentBlock::Text(_)));
+        assert_eq!(msg.content.len(), 1);
 
         let msg = Message::user("user content");
-        assert!(matches!(msg.content, ContentBlock::Text(_)));
+        assert_eq!(msg.content.len(), 1);
 
         let msg = Message::tool("tool content");
-        assert!(matches!(msg.content, ContentBlock::Text(_)));
+        assert_eq!(msg.content.len(), 1);
+    }
+
+    #[test]
+    fn test_message_push() {
+        // Builder pattern for adding blocks
+        let msg = Message::user("First")
+            .push(ContentBlock::thinking("Second"))
+            .push(ContentBlock::text("Third"));
+        assert_eq!(msg.content.len(), 3);
     }
 
     #[test]
@@ -296,11 +320,10 @@ mod tests {
 
     #[test]
     fn test_message_insert() {
-        // insert now replaces the content
-        let msg =
-            Message::system("Initial content").insert(ContentBlock::text("Additional content"));
-        assert!(matches!(msg.content, ContentBlock::Text(_)));
-        if let ContentBlock::Text(block) = &msg.content {
+        // insert now replaced by push
+        let msg = Message::system("Initial content").push(ContentBlock::text("Additional content"));
+        assert_eq!(msg.content.len(), 2);
+        if let ContentBlock::Text(block) = &msg.content[1] {
             assert_eq!(block.text, "Additional content");
         }
     }
@@ -343,5 +366,20 @@ mod tests {
         assert_eq!(value["role"], "user");
         assert!(value["content"].is_string());
         assert_eq!(value["content"], "Hello, world!");
+    }
+
+    #[test]
+    fn test_message_serialization_multi_block() {
+        let msg = Message::user("Hello").push(ContentBlock::thinking("Thinking"));
+        let json = serde_json::to_string(&msg).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(value["role"], "user");
+        assert!(value["content"].is_string());
+        let content = value["content"].as_str().unwrap();
+        let lines = content.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "Hello");
+        assert_eq!(lines[1], "Thinking");
     }
 }

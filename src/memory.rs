@@ -92,7 +92,7 @@ mod tests {
         assert_eq!(1, recent_messages.len());
 
         // Check that the content is a TextBlock with the expected text
-        if let ContentBlock::Text(text_block) = &recent_messages[0].content {
+        if let ContentBlock::Text(text_block) = &recent_messages[0].content[0] {
             assert_eq!(text_block.text, "tool calling");
         } else {
             panic!("Expected TextBlock in content");

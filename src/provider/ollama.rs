@@ -24,51 +24,37 @@ impl From<&Message> for OllamaRequestMessage {
     fn from(msg: &Message) -> Self {
         let role = msg.role.clone();
 
-        match &msg.content {
-            ContentBlock::Text(text) => Self {
-                role,
-                content: text.text.clone(),
-                tool_calls: None,
-            },
-            ContentBlock::Thinking(thinking) => Self {
-                role,
-                content: thinking.thinking.clone(),
-                tool_calls: None,
-            },
-            ContentBlock::ToolResult(result) => {
-                // For Ollama, tool results don't have tool_call_id
-                let content_str = match &result.content {
-                    Some(crate::message::ToolResultContent::Text(s)) => s.clone(),
-                    Some(crate::message::ToolResultContent::Objects(objs)) => {
-                        serde_json::to_string(objs).unwrap_or_default()
-                    }
-                    None => String::new(),
-                };
-                Self {
-                    role,
-                    content: content_str,
-                    tool_calls: None,
-                }
-            }
-            ContentBlock::ToolUse(tool_use) => {
-                // For Ollama, arguments should be an object, not a string
-                let function_call = serde_json::json!({
-                    "name": tool_use.name,
-                    "arguments": tool_use.input  // Pass the object directly
-                });
+        let content_text = msg
+            .content
+            .iter()
+            .filter_map(|block| block.as_text())
+            .collect::<Vec<_>>()
+            .join("\n");
 
-                let tool_call_json = serde_json::json!({
-                    "id": tool_use.id,
-                    "type": "function",
-                    "function": function_call
-                });
+        // Check for tool_use blocks
+        let tool_calls = msg.content.iter().find_map(|block| {
+            let ContentBlock::ToolUse(tool_use) = block else {
+                return None;
+            };
+            // For Ollama, arguments should be an object, not a string
+            let function_call = serde_json::json!({
+                "name": tool_use.name,
+                "arguments": tool_use.input  // Pass the object directly
+            });
 
-                Self {
-                    role,
-                    content: String::new(),
-                    tool_calls: Some(vec![tool_call_json]),
-                }
-            }
+            let tool_call_json = serde_json::json!({
+                "id": tool_use.id,
+                "type": "function",
+                "function": function_call
+            });
+
+            Some(vec![tool_call_json])
+        });
+
+        Self {
+            role,
+            content: content_text,
+            tool_calls,
         }
     }
 }

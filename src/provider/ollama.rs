@@ -87,7 +87,11 @@ impl OllamaClient {
     }
 
     fn endpoint(&self, path: &str) -> String {
-        format!("{}/{}", self.base_url, path)
+        format!(
+            "{}/{}",
+            self.base_url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        )
     }
 
     async fn post(&self, path: &str, body: &serde_json::Value) -> Result<reqwest::Response> {
@@ -757,14 +761,14 @@ mod tests {
 
     #[test]
     fn test_ollama_client_endpoint() {
-        let client = OllamaClient::new("http://127.0.0.1:11434".to_string());
+        let client = OllamaClient::new("http://127.0.0.1:11434/".to_string());
 
         assert_eq!(
             client.endpoint("api/chat"),
             "http://127.0.0.1:11434/api/chat"
         );
         assert_eq!(
-            client.endpoint("api/tags"),
+            client.endpoint("/api/tags"),
             "http://127.0.0.1:11434/api/tags"
         );
     }

@@ -27,7 +27,11 @@ impl ZaiClient {
     }
 
     fn endpoint(&self, path: &str) -> String {
-        format!("{}/{}", self.base_url, path)
+        format!(
+            "{}/{}",
+            self.base_url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        )
     }
 
     async fn post(&self, path: &str, body: &serde_json::Value) -> Result<reqwest::Response> {
@@ -846,13 +850,13 @@ mod tests {
     fn test_zai_client_endpoint() {
         let client = ZaiClient::new(
             "test-key".to_string(),
-            "https://api.test.com/v1".to_string(),
+            "https://api.test.com/v1/".to_string(),
         );
 
         assert_eq!(
             client.endpoint("chat/completions"),
             "https://api.test.com/v1/chat/completions"
         );
-        assert_eq!(client.endpoint("models"), "https://api.test.com/v1/models");
+        assert_eq!(client.endpoint("/models"), "https://api.test.com/v1/models");
     }
 }

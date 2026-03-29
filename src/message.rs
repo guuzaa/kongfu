@@ -222,17 +222,8 @@ impl Message {
         Self::new(Role::Tool, content.into())
     }
 
-    pub fn with_blocks(role: Role, blocks: Vec<ContentBlock>) -> Self {
-        // Only take the first block
-        let content = blocks
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| ContentBlock::text(""));
-        Self::new(role, content)
-    }
-
-    pub fn with_block(mut self, block: ContentBlock) -> Self {
-        // Replace current block with new one
+    /// Replace current block with new one
+    pub fn insert(mut self, block: ContentBlock) -> Self {
         self.content = block;
         self
     }
@@ -304,22 +295,10 @@ mod tests {
     }
 
     #[test]
-    fn test_message_with_multiple_blocks() {
-        // with_blocks now only takes the first block
-        let blocks = vec![
-            ContentBlock::thinking("First text"),
-            ContentBlock::text("Second text"),
-        ];
-        let msg = Message::with_blocks(Role::User, blocks);
-        // Should only have the first block (thinking)
-        assert!(matches!(msg.content, ContentBlock::Thinking(_)));
-    }
-
-    #[test]
-    fn test_message_with_block() {
-        // with_block now replaces the content
+    fn test_message_insert() {
+        // insert now replaces the content
         let msg =
-            Message::system("Initial content").with_block(ContentBlock::text("Additional content"));
+            Message::system("Initial content").insert(ContentBlock::text("Additional content"));
         assert!(matches!(msg.content, ContentBlock::Text(_)));
         if let ContentBlock::Text(block) = &msg.content {
             assert_eq!(block.text, "Additional content");
@@ -364,24 +343,5 @@ mod tests {
         assert_eq!(value["role"], "user");
         assert!(value["content"].is_string());
         assert_eq!(value["content"], "Hello, world!");
-    }
-
-    #[test]
-    fn test_message_serialization_non_text_block() {
-        // Non-text block should serialize to object
-        let mut input = HashMap::new();
-        input.insert("param".to_string(), serde_json::json!("value"));
-
-        let msg = Message::with_blocks(
-            Role::Assistant,
-            vec![ContentBlock::tool_use("tool_1", "my_tool", input)],
-        );
-        let json = serde_json::to_string(&msg).unwrap();
-
-        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(value["role"], "assistant");
-        // Single non-text block serializes to an object with type field
-        assert!(value["content"].is_null());
     }
 }

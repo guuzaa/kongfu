@@ -90,6 +90,6 @@ mod tests {
         // Verify JSON structure
         let parsed: serde_json::Value = serde_json::from_str(&def_json).unwrap();
         assert_eq!(parsed["name"], "list_directory");
-        assert!(parsed["parameters"]["properties"]["path"]["type"] == "string");
+        assert_eq!(parsed["parameters"]["properties"]["path"]["type"], "string");
     }
 }

@@ -57,6 +57,7 @@ pub enum ProviderName {
     Anthropic,
     Xai,
     Zai,
+    Ollama,
     Custom(String),
 }
 
@@ -67,6 +68,7 @@ impl ProviderName {
             ProviderName::Anthropic => "anthropic",
             ProviderName::Xai => "xAI",
             ProviderName::Zai => "z.ai",
+            ProviderName::Ollama => "ollama",
             ProviderName::Custom(name) => name.as_str(),
         }
     }
@@ -85,6 +87,7 @@ impl From<&str> for ProviderName {
             "anthropic" => ProviderName::Anthropic,
             "z.ai" | "zai" => ProviderName::Zai,
             "xai" => ProviderName::Xai,
+            "ollama" => ProviderName::Ollama,
             other => ProviderName::Custom(other.to_string()),
         }
     }

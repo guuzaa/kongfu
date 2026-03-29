@@ -1,6 +1,6 @@
 use kongfu::{
     ContentBlock, EditFile, ListDirectory, Message, ReadFile, RequestOptions, StreamingProvider,
-    ToolChoice, ToolRegistry, ToolResultContent, ToolUseBlock, Zai,
+    ToolChoice, ToolRegistry, ToolResultContent, ToolUseBlock, provider::Zai,
 };
 use std::collections::HashMap;
 use std::io::Write;

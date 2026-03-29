@@ -1,6 +1,6 @@
 use kongfu::{
     ContentBlock, ListDirectory, Message, Provider, ReadFile, RequestOptions, ToolChoice,
-    ToolRegistry, ToolResultContent, Zai,
+    ToolRegistry, ToolResultContent, provider::Ollama,
 };
 use std::io::Write;
 
@@ -10,8 +10,8 @@ use std::io::Write;
 
 /// Run the agent loop with the new tool system
 async fn run_agent(
-    zai: &Zai,
-    user_query: &str,
+    provider: &dyn Provider,
+    messages: &mut Vec<Message>,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let tool_registry = ToolRegistry::new().add(ListDirectory).add(ReadFile);
     let tools = tool_registry.to_tools();
@@ -19,16 +19,6 @@ async fn run_agent(
     let options = RequestOptions {
         tool_choice: Some(ToolChoice::Auto),
     };
-
-    let mut messages = vec![
-        Message::system(
-            "You are a helpful AI assistant with access to tools. \
-             When you need to explore the file system or read files, use the available tools. \
-             Always explain what you're doing before using a tool. \
-             After getting tool results, provide a clear summary of what you found.",
-        ),
-        Message::user(user_query),
-    ];
 
     let mut step = 0;
     let max_steps = 10;
@@ -43,7 +33,7 @@ async fn run_agent(
         println!("\n--- Step {} ---", step);
 
         // Call the LLM
-        let response = zai.generate(&messages, Some(&tools), &options).await?;
+        let response = provider.generate(&messages, Some(&tools), &options).await?;
 
         // Process all content blocks
         let mut has_tool_calls = false;
@@ -61,10 +51,6 @@ async fn run_agent(
                     has_tool_calls = true;
                     println!("\n🔧 Tool Call: {}", tool_use.name);
 
-                    if let Ok(params) = serde_json::to_string_pretty(&tool_use.input) {
-                        println!("   Parameters: {}", params);
-                    }
-
                     // Execute the tool using the registry
                     let result = tool_registry
                         .execute(&tool_use.name, serde_json::json!(tool_use.input))
@@ -73,13 +59,19 @@ async fn run_agent(
                     // Prepare the tool result message
                     let tool_result = match result {
                         Ok(output) => {
-                            println!("   ✅ Success");
-                            let output_str = serde_json::to_string_pretty(&output)
-                                .unwrap_or_else(|_| output.to_string());
-                            if output_str.len() <= 200 {
-                                println!("   Result: {}", output_str);
+                            // Convert Value to appropriate string representation
+                            let output_str = if output.is_string() {
+                                // Extract string content directly
+                                output.as_str().unwrap_or(&output.to_string()).to_string()
                             } else {
-                                println!("   Result: ({} bytes)", output_str.len());
+                                // For non-string values, format as JSON
+                                serde_json::to_string_pretty(&output)
+                                    .unwrap_or_else(|_| output.to_string())
+                            };
+                            if output_str.len() <= 200 {
+                                println!("   Tool Result: {}", output_str);
+                            } else {
+                                println!("   Tool Result: ({} bytes)", output_str.len());
                             }
                             ContentBlock::tool_result(
                                 &tool_use.id,
@@ -114,15 +106,12 @@ async fn run_agent(
             continue;
         }
 
-        // If we have text and no tool calls, we're done
+        // If we have text and no tool calls, we're done with this turn
         if !final_text.is_empty() {
             println!("\n🤖 Assistant: {}", final_text);
-            println!("\n✅ Agent completed successfully");
-            break;
+            // Add the assistant's response to messages
+            messages.push(Message::assistant(final_text));
         }
-
-        // If we got here, something unexpected happened
-        println!("\n⚠️  Empty response, stopping");
         break;
     }
 
@@ -141,17 +130,25 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     println!("╚════════════════════════════════════════════════════════════╝");
     println!();
 
-    // Initialize Zai provider
-    let zai = Zai::builder()
-        .base_url("https://api.z.ai/api/coding/paas/v4")
-        .model(std::env::var("ZAI_MODEL").unwrap_or_else(|_| "glm-4.7".to_string()))
-        .build()
-        .expect("Failed to create Zai provider. Check ZAI_API_KEY environment variable.");
+    let client = Ollama::builder()
+        .base_url("http://127.0.0.1:11434")
+        .model("qwen3.5:9b")
+        .temperature(0.7)
+        .build();
 
     println!(
-        "✓ Connected to Zai provider (model: {})\n",
-        zai.config().model
+        "✓ Connected to {} provider (model: {})\n",
+        client.name(),
+        client.config().model
     );
+
+    // Initialize conversation with system message
+    let mut messages = vec![Message::system(
+        "You are a helpful AI assistant with access to tools. \
+             When you need to explore the file system or read files, use the available tools. \
+             Always explain what you're doing before using a tool. \
+             After getting tool results, provide a clear summary of what you found.",
+    )];
 
     // Example queries to try:
     let example_queries = vec![
@@ -165,23 +162,52 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     for (i, query) in example_queries.iter().enumerate() {
         println!("   {}. \"{}\"", i + 1, query);
     }
+    println!("   Type 'quit', 'exit', or 'clear' to control the session");
     println!();
 
-    // Get user input
-    print!("👤 Your query: ");
-    std::io::stdout().flush()?;
+    // Multi-turn conversation loop
+    loop {
+        // Get user input
+        print!("👤 Your query: ");
+        std::io::stdout().flush()?;
 
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-    let input = input.trim();
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        let input = input.trim();
 
-    if input.is_empty() {
-        println!("❌ Query cannot be empty");
-        return Ok(());
+        // Handle special commands
+        match input {
+            "quit" | "exit" => {
+                println!("\n👋 Goodbye!");
+                break;
+            }
+            "clear" => {
+                println!("\n🗑️  Conversation history cleared");
+                messages = vec![Message::system(
+                    "You are a helpful AI assistant with access to tools. \
+                         When you need to explore the file system or read files, use the available tools. \
+                         Always explain what you're doing before using a tool. \
+                         After getting tool results, provide a clear summary of what you found.",
+                )];
+                continue;
+            }
+            "" => {
+                println!("❌ Query cannot be empty");
+                continue;
+            }
+            _ => {}
+        }
+
+        // Add user message to conversation history
+        messages.push(Message::user(input));
+
+        // Run the agent for this turn
+        if let Err(e) = run_agent(&client, &mut messages).await {
+            println!("\n❌ Error: {}", e);
+            // Remove the last user message if there was an error
+            messages.pop();
+        }
     }
-
-    // Run the agent
-    run_agent(&zai, input).await?;
 
     Ok(())
 }

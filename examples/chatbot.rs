@@ -1,4 +1,4 @@
-use kongfu::{Message, RequestOptions, Role, StreamingProvider, StreamingUpdate, Zai};
+use kongfu::{Message, RequestOptions, Role, StreamingProvider, StreamingUpdate, provider::Zai};
 use std::io::{self, Write};
 
 fn print_welcome() {

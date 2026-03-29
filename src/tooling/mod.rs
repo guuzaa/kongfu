@@ -246,11 +246,13 @@ impl ToolRegistry {
     }
 
     /// Get tool count
+    #[inline]
     pub fn len(&self) -> usize {
         self.tools.len()
     }
 
     /// Check if registry is empty
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
     }

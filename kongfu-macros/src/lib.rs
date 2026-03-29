@@ -45,7 +45,7 @@ fn generate_schema_impl(input: &DeriveInput) -> TokenStream2 {
 
     let properties: Vec<TokenStream2> = fields
         .iter()
-        .map(|field| generate_property(field))
+        .map(generate_property)
         .collect();
 
     let required: Vec<TokenStream2> = fields

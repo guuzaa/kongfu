@@ -576,7 +576,7 @@ impl StreamingProvider for Zai {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ToolChoice;
+    use crate::provider::ToolChoice;
     use std::io::Write;
 
     #[tokio::test]

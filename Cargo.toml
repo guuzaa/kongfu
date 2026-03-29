@@ -6,7 +6,7 @@ resolver = "2"
 name = "kongfu"
 version = "0.1.0"
 edition = "2024"
-description = "An LLM abstraction layer"
+description = "An LLM abstraction layer for AI agent applications"
 
 [dependencies]
 kongfu-macros = { path = "kongfu-macros" }

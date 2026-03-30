@@ -110,6 +110,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Run the agent with streaming for this turn
                 println!("\n🤖 Assistant:");
                 match agent.run(&input).await {
+                    Err(e) => {
+                        println!("\n❌ Error: {}", e);
+                    }
                     Ok(stream) => {
                         // Pin the stream
                         let mut stream = pin!(stream);
@@ -149,9 +152,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 _ => {}
                             }
                         }
-                    }
-                    Err(e) => {
-                        println!("\n❌ Error: {}", e);
                     }
                 }
             }

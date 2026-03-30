@@ -235,6 +235,10 @@ impl Message {
         Self::new(Role::Tool, vec![content.into()])
     }
 
+    pub fn contents(role: Role, contents: Vec<impl Into<ContentBlock>>) -> Self {
+        Self::new(role, contents.into_iter().map(|c| c.into()).collect())
+    }
+
     /// Add a block to the same message
     pub fn push(mut self, block: impl Into<ContentBlock>) -> Self {
         self.content.push(block.into());

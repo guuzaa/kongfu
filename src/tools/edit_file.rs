@@ -1,4 +1,4 @@
-use crate::tooling::ToolHandler;
+use crate::tools::ToolHandler;
 use kongfu_macros::ToolParams;
 use serde::Deserialize;
 
@@ -72,9 +72,7 @@ impl ToolHandler for EditFile {
         } else {
             // For new files, canonicalize the parent directory and join the filename
             let path = std::path::Path::new(&params.path);
-            let parent = path
-                .parent()
-                .unwrap_or_else(|| std::path::Path::new("."));
+            let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
             let canonical_parent = std::fs::canonicalize(parent)
                 .map_err(|e| format!("Invalid path '{}': {}", params.path, e))?;
             let filename = path
@@ -122,11 +120,14 @@ impl ToolHandler for EditFile {
             std::fs::write(&canonical, &new_content)
                 .map_err(|e| format!("Failed to create '{}': {}", params.path, e))?;
 
-            let new_line_count = if new_content.is_empty() { 0 } else { new_content.lines().count() };
+            let new_line_count = if new_content.is_empty() {
+                0
+            } else {
+                new_content.lines().count()
+            };
             return Ok(format!(
                 "Successfully created '{}' with {} lines.",
-                params.path,
-                new_line_count,
+                params.path, new_line_count,
             ));
         }
 
@@ -172,11 +173,14 @@ impl ToolHandler for EditFile {
                 std::fs::write(&canonical, &new_content)
                     .map_err(|e| format!("Failed to write '{}': {}", params.path, e))?;
 
-                let new_line_count = if new_content.is_empty() { 0 } else { new_content.lines().count() };
+                let new_line_count = if new_content.is_empty() {
+                    0
+                } else {
+                    new_content.lines().count()
+                };
                 return Ok(format!(
                     "Successfully edited '{}': wrote {} lines to empty file.",
-                    params.path,
-                    new_line_count,
+                    params.path, new_line_count,
                 ));
             } else {
                 return Err(format!(
@@ -255,7 +259,7 @@ impl ToolHandler for EditFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tooling::ToFunctionDefinition;
+    use crate::tools::ToFunctionDefinition;
     use tempfile::NamedTempFile;
 
     #[test]

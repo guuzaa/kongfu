@@ -5,9 +5,9 @@
 
 use crate::error::{KongfuError, Result};
 use crate::memory::{Memory, MemoryStore};
-use crate::message::{ContentBlock, Message, ToolResultContent};
+use crate::message::{ContentBlock, Message, Role, ToolResultContent};
 use crate::provider::{Provider, RequestOptions, Usage};
-use crate::tooling::{ToolHandler, ToolRegistry};
+use crate::tools::{ToolHandler, ToolRegistry};
 use futures::future::join_all;
 use serde_json::Value;
 
@@ -23,6 +23,8 @@ use serde_json::Value;
 pub struct AgentResponse {
     /// Final text response from the assistant
     pub text: String,
+    /// Thinking/reasoning content (for caching and inspection)
+    pub thinking: String,
     /// Number of agentic loop steps taken
     pub steps_taken: usize,
     /// Token usage accumulated across all steps
@@ -117,10 +119,12 @@ impl<P: Provider> Agent<P> {
     /// - Max steps limit is exceeded
     pub async fn run(&mut self, user_input: &str) -> Result<AgentResponse> {
         // Add system prompt to memory on first call if memory is empty
-        if let Some(ref prompt) = self.system_prompt
+        if let Some(ref system_prompt) = self.system_prompt
             && self.memory.is_empty().await
         {
-            self.memory.add(Message::system(prompt.as_str())).await?;
+            self.memory
+                .add(Message::system(system_prompt.as_str()))
+                .await?;
         }
 
         // Add user message to memory
@@ -128,6 +132,7 @@ impl<P: Provider> Agent<P> {
 
         let mut steps_taken = 0;
         let mut total_usage: Option<Usage> = None;
+        let tools = self.tools.to_tools();
 
         loop {
             // Check step limit
@@ -136,10 +141,9 @@ impl<P: Provider> Agent<P> {
             }
 
             // Build message list: system prompt + conversation history
-            let messages = self.build_messages().await?;
+            let messages = self.history().await?;
 
             // Call provider
-            let tools = self.tools.to_tools();
             let response = self
                 .provider
                 .generate(&messages, Some(&tools), &self.options)
@@ -158,20 +162,22 @@ impl<P: Provider> Agent<P> {
                 });
             }
 
-            // Partition response into tool uses and final text
+            // Partition response into tool uses, final text, and thinking content
             let mut tool_uses = Vec::new();
             let mut final_text = String::new();
+            let mut thinking_content = String::new();
 
-            for block in &response.content {
+            for block in response.content {
                 match block {
                     ContentBlock::ToolUse(tool_use) => {
                         tool_uses.push(tool_use.clone());
                     }
                     ContentBlock::Text(text) => {
-                        final_text = text.text.clone();
+                        final_text = text.text;
                     }
-                    ContentBlock::Thinking(_) => {
-                        // Thinking blocks are ignored in non-streaming mode
+                    ContentBlock::Thinking(thinking) => {
+                        thinking_content.push_str(&thinking.thinking);
+                        thinking_content.push('\n');
                     }
                     ContentBlock::ToolResult(_) => {
                         // Tool results shouldn't appear in assistant responses
@@ -181,15 +187,22 @@ impl<P: Provider> Agent<P> {
 
             // Branch: no tool uses → we're done
             if tool_uses.is_empty() {
-                // Add assistant message to memory
+                let mut blocks = Vec::new();
+                if !thinking_content.is_empty() {
+                    blocks.push(ContentBlock::thinking(&thinking_content));
+                }
                 if !final_text.is_empty() {
+                    blocks.push(ContentBlock::text(&final_text));
+                }
+                if !blocks.is_empty() {
                     self.memory
-                        .add(Message::assistant(final_text.clone()))
+                        .add(Message::contents(Role::Assistant, blocks))
                         .await?;
                 }
 
                 return Ok(AgentResponse {
                     text: final_text,
+                    thinking: thinking_content,
                     steps_taken: steps_taken + 1,
                     usage: total_usage,
                     finish_reason: response.finish_reason,
@@ -267,12 +280,6 @@ impl<P: Provider> Agent<P> {
 
     /// Read the current conversation history
     pub async fn history(&self) -> Result<Vec<Message>> {
-        self.memory.get_all().await
-    }
-
-    /// Build the message list for provider calls
-    async fn build_messages(&self) -> Result<Vec<Message>> {
-        // System prompt is already in memory, just return all messages
         self.memory.get_all().await
     }
 }
@@ -385,7 +392,7 @@ impl<P: Provider> AgentBuilder<P> {
 ///     .tool(ListDirectory)
 ///     .build();
 ///
-/// let mut stream = agent.run_stream("What files in src?").await?;
+/// let mut stream = agent.run("What files in src?").await?;
 ///
 /// while let Some(event) = stream.next().await {
 ///     match event? {
@@ -428,7 +435,7 @@ impl<P: crate::provider::StreamingProvider> StreamingAgent<P> {
     ///
     /// This supports full agentic loop with tool execution, similar to `Agent::run`
     /// but with streaming output for better user experience.
-    pub async fn run_stream(
+    pub async fn run(
         &mut self,
         user_input: &str,
     ) -> Result<impl futures::Stream<Item = Result<AgentEvent>>> {
@@ -461,7 +468,7 @@ impl<P: crate::provider::StreamingProvider> StreamingAgent<P> {
                 }
 
                 // Build messages
-                let messages = match self.agent.build_messages().await {
+                let messages = match self.agent.history().await {
                     Ok(m) => m,
                     Err(e) => {
                         yield Err(e);
@@ -482,6 +489,7 @@ impl<P: crate::provider::StreamingProvider> StreamingAgent<P> {
                 };
 
                 let mut final_text = String::new();
+                let mut thinking_content = String::new();
                 let mut tool_calls = Vec::new();
 
                 // Process streaming updates
@@ -496,6 +504,8 @@ impl<P: crate::provider::StreamingProvider> StreamingAgent<P> {
 
                     match update {
                         crate::provider::StreamingUpdate::Thinking(chunk) => {
+                            thinking_content.push_str(&chunk);
+                            thinking_content.push('\n');
                             yield Ok(AgentEvent::Thinking(chunk));
                         }
                         crate::provider::StreamingUpdate::Content(chunk) => {
@@ -526,9 +536,17 @@ impl<P: crate::provider::StreamingProvider> StreamingAgent<P> {
 
                 // Branch: no tool calls → we're done
                 if tool_calls.is_empty() {
-                    // Add assistant message to memory
-                    if !final_text.is_empty() {
-                        if let Err(e) = self.agent.memory.add(Message::assistant(final_text.clone())).await {
+                    // Add assistant message to memory with thinking content for KV cache
+                    // Order: thinking first, then final text
+                    if !thinking_content.is_empty() || !final_text.is_empty() {
+                        let mut blocks = Vec::new();
+                        if !thinking_content.is_empty() {
+                            blocks.push(ContentBlock::thinking(&thinking_content));
+                        }
+                        if !final_text.is_empty() {
+                            blocks.push(ContentBlock::text(&final_text));
+                        }
+                        if let Err(e) = self.agent.memory.add(Message::contents(Role::Assistant, blocks)).await {
                             yield Err(e);
                             return;
                         }
@@ -536,6 +554,7 @@ impl<P: crate::provider::StreamingProvider> StreamingAgent<P> {
 
                     yield Ok(AgentEvent::Done(AgentResponse {
                         text: final_text,
+                        thinking: thinking_content,
                         steps_taken: steps_taken + 1,
                         usage: total_usage,
                         finish_reason: None,
@@ -634,6 +653,7 @@ mod tests {
     fn test_agent_response() {
         let response = AgentResponse {
             text: "Hello".to_string(),
+            thinking: String::new(),
             steps_taken: 2,
             usage: None,
             finish_reason: Some("stop".to_string()),

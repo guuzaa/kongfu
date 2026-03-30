@@ -1,4 +1,4 @@
-use crate::tooling::ToolHandler;
+use crate::tools::ToolHandler;
 use kongfu_macros::ToolParams;
 use serde::Deserialize;
 
@@ -71,7 +71,7 @@ impl ToolHandler for ListDirectory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tooling::ToFunctionDefinition;
+    use crate::tools::ToFunctionDefinition;
 
     #[test]
     fn test_list_directory_serialization() {

@@ -3,7 +3,7 @@ mod error;
 mod memory;
 mod message;
 pub mod provider;
-pub mod tooling;
+pub mod tools;
 
 pub use message::{
     ContentBlock, Message, Role, TextBlock, ThinkingBlock, ToolResultBlock, ToolResultContent,
@@ -15,6 +15,6 @@ pub use provider::{
     RequestOptions, StreamingProvider, StreamingUpdate, ToolChoice, Usage,
 };
 
-pub use tooling::ToolParams;
+pub use tools::ToolParams;
 
 pub use agent::{Agent, AgentBuilder, AgentEvent, AgentResponse, StreamingAgent};

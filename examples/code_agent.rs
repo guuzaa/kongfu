@@ -1,7 +1,7 @@
-use kongfu::provider::Zai;
-use kongfu::tooling::{EditFile, ListDirectory, ReadFile};
-use kongfu::{Agent, AgentEvent, Provider, StreamingAgent};
 use futures::StreamExt;
+use kongfu::provider::Zai;
+use kongfu::tools::{EditFile, ListDirectory, ReadFile};
+use kongfu::{Agent, AgentEvent, Provider, StreamingAgent};
 use std::io::Write;
 use std::pin::pin;
 
@@ -109,7 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => {
                 // Run the agent with streaming for this turn
                 println!("\n🤖 Assistant:");
-                match agent.run_stream(&input).await {
+                match agent.run(&input).await {
                     Ok(stream) => {
                         // Pin the stream
                         let mut stream = pin!(stream);

@@ -1,5 +1,5 @@
 use kongfu::provider::Ollama;
-use kongfu::tooling::{ListDirectory, ReadFile};
+use kongfu::tools::{ListDirectory, ReadFile};
 use kongfu::{Agent, Provider};
 use std::io::Write;
 

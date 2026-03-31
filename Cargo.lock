@@ -746,9 +746,14 @@ dependencies = [
 name = "kongfu-macros"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "kongfu",
  "proc-macro2",
  "quote",
+ "serde",
+ "serde_json",
  "syn",
+ "tokio",
 ]
 
 [[package]]

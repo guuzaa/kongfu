@@ -15,6 +15,7 @@ pub use provider::{
     RequestOptions, StreamingProvider, StreamingUpdate, ToolChoice, Usage,
 };
 
+pub use kongfu_macros::tool;
 pub use tools::ToolParams;
 
 pub use agent::{Agent, AgentBuilder, AgentEvent, AgentResponse, StreamingAgent};

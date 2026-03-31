@@ -85,7 +85,7 @@ pub struct Agent<P: Provider> {
     tools: ToolRegistry,
     memory: MemoryStore,
     options: RequestOptions,
-    max_steps: usize,
+    max_steps: Option<usize>,
     system_prompt: Option<String>,
 }
 
@@ -136,8 +136,10 @@ impl<P: Provider> Agent<P> {
 
         loop {
             // Check step limit
-            if steps_taken >= self.max_steps {
-                return Err(KongfuError::MaxStepsExceeded(self.max_steps));
+            if let Some(max) = self.max_steps
+                && steps_taken >= max
+            {
+                return Err(KongfuError::MaxStepsExceeded(max));
             }
 
             // Build message list: system prompt + conversation history
@@ -306,7 +308,7 @@ pub struct AgentBuilder<P: Provider> {
     tools: ToolRegistry,
     memory_limit: Option<usize>,
     options: RequestOptions,
-    max_steps: usize,
+    max_steps: Option<usize>,
     system_prompt: Option<String>,
 }
 
@@ -317,7 +319,7 @@ impl<P: Provider> AgentBuilder<P> {
             tools: ToolRegistry::new(),
             memory_limit: None,
             options: RequestOptions::default(),
-            max_steps: 10,
+            max_steps: None,
             system_prompt: None,
         }
     }
@@ -335,8 +337,8 @@ impl<P: Provider> AgentBuilder<P> {
     }
 
     /// Set the maximum number of agentic loop steps
-    pub fn max_steps(mut self, max: usize) -> Self {
-        self.max_steps = max;
+    pub fn max_steps(mut self, max: impl Into<Option<usize>>) -> Self {
+        self.max_steps = max.into();
         self
     }
 
@@ -462,8 +464,8 @@ impl<P: crate::provider::StreamingProvider> StreamingAgent<P> {
 
             loop {
                 // Check step limit
-                if steps_taken >= self.agent.max_steps {
-                    yield Err(KongfuError::MaxStepsExceeded(self.agent.max_steps));
+                if let Some(max) = self.agent.max_steps && steps_taken >= max {
+                    yield Err(KongfuError::MaxStepsExceeded(max));
                     return;
                 }
 

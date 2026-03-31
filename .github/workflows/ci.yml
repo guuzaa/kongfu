@@ -58,7 +58,7 @@ jobs:
 
       - name: Format test
         shell: bash
-        run: cargo fmt --check 
+        run: cargo fmt --check > /dev/null
 
       - name: Test
         shell: bash

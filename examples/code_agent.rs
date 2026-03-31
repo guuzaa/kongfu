@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tool(ListDirectory)
         .tool(ReadFile)
         .tool(EditFile)
-        .max_steps(15) // Code editing may require more steps
+        .max_steps(50)
         .memory_limit(100)
         .build();
 

@@ -11,13 +11,13 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::pin::Pin;
 
-struct ZaiClient {
+struct XaiClient {
     http: reqwest::Client,
     api_key: String,
     base_url: String,
 }
 
-impl ZaiClient {
+impl XaiClient {
     fn new(api_key: String, base_url: String) -> Self {
         Self {
             http: reqwest::Client::new(),
@@ -43,7 +43,7 @@ impl ZaiClient {
             .json(body)
             .send()
             .await
-            .map_err(|e| KongfuError::NetworkError(format!("Zai API request failed: {}", e)))?;
+            .map_err(|e| KongfuError::NetworkError(format!("Xai API request failed: {}", e)))?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
@@ -58,19 +58,19 @@ impl ZaiClient {
     }
 }
 
-pub struct Zai {
+pub struct Xai {
     config: ModelConfig,
-    client: ZaiClient,
+    client: XaiClient,
 }
 
-impl Zai {
+impl Xai {
     pub fn new(config: ModelConfig) -> Self {
-        let client = ZaiClient::new(config.api_key.clone(), config.base_url.clone());
+        let client = XaiClient::new(config.api_key.clone(), config.base_url.clone());
         Self { config, client }
     }
 
-    pub fn builder() -> ZaiBuilder {
-        ZaiBuilder::new()
+    pub fn builder() -> XaiBuilder {
+        XaiBuilder::new()
     }
 
     pub fn config(&self) -> &ModelConfig {
@@ -87,19 +87,22 @@ impl Zai {
         let mut body = json!({
             "model": self.config.model,
             "messages": messages,
-            "temperature": self.config.temperature,
             "stream": stream,
+            "temperature": self.config.temperature,
         });
 
         if let Some(max_tokens) = self.config.max_tokens {
-            body["max_tokens"] = json!(max_tokens);
+            body["max_completion_tokens"] = json!(max_tokens);
         }
+
         if let Some(top_p) = self.config.top_p {
             body["top_p"] = json!(top_p);
         }
+
         if let Some(tool_choice) = &options.tool_choice {
             body["tool_choice"] = json!(tool_choice);
         }
+
         if let Some(tools) = tools {
             body["tools"] = json!(tools);
         }
@@ -109,7 +112,7 @@ impl Zai {
 }
 
 #[derive(Default)]
-pub struct ZaiBuilder {
+pub struct XaiBuilder {
     model: Option<String>,
     api_key: Option<String>,
     base_url: Option<String>,
@@ -118,7 +121,7 @@ pub struct ZaiBuilder {
     top_p: Option<f64>,
 }
 
-impl ZaiBuilder {
+impl XaiBuilder {
     pub fn new() -> Self {
         Self::default()
     }
@@ -153,20 +156,20 @@ impl ZaiBuilder {
         self
     }
 
-    pub fn build(self) -> Result<Zai> {
+    pub fn build(self) -> Result<Xai> {
         let api_key = self
             .api_key
-            .or_else(|| std::env::var("ZAI_API_KEY").ok())
+            .or_else(|| std::env::var("XAI_API_KEY").ok())
             .ok_or_else(|| KongfuError::InvalidConfig(
-                "api_key is required. Set it via ZaiBuilder::api_key() or ZAI_API_KEY environment variable".to_string()
+                "api_key is required. Set it via XaiBuilder::api_key() or XAI_API_KEY environment variable".to_string()
             ))?;
 
         let base_url = self
             .base_url
-            .or_else(|| std::env::var("ZAI_BASE_URL").ok())
-            .unwrap_or_else(|| "https://api.z.ai/api/paas/v4".to_string());
+            .or_else(|| std::env::var("XAI_BASE_URL").ok())
+            .unwrap_or_else(|| "https://api.x.ai/v1".to_string());
 
-        let model = self.model.unwrap_or_else(|| "gpt-4".to_string());
+        let model = self.model.unwrap_or_else(|| "grok-4-1-fast-reasoning".to_string());
 
         let config = ModelConfig {
             model,
@@ -177,62 +180,35 @@ impl ZaiBuilder {
             top_p: self.top_p,
         };
 
-        let client = ZaiClient::new(config.api_key.clone(), config.base_url.clone());
+        let client = XaiClient::new(config.api_key.clone(), config.base_url.clone());
 
-        Ok(Zai { config, client })
+        Ok(Xai { config, client })
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct ZaiResponse {
-    choices: Vec<ZaiChoice>,
-    usage: ZaiUsage,
-    model: String,
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    request_id: Option<String>,
-    #[serde(default)]
-    created: Option<u64>,
-    #[serde(default)]
-    object: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ZaiChoice {
-    message: ZaiMessage,
-    finish_reason: String,
-    #[serde(default)]
-    index: Option<usize>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ZaiMessage {
-    #[serde(default)]
-    content: Option<String>,
-    #[serde(default)]
-    reasoning_content: Option<String>,
-    #[serde(default)]
-    role: Option<String>,
-    #[serde(default)]
-    tool_calls: Option<Vec<ToolCall>>,
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct PromptTokensDetails {
+    #[serde(default)]
     cached_tokens: usize,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct CompletionTokensDetails {
     #[serde(default)]
     reasoning_tokens: usize,
+    #[serde(default)]
+    audio_tokens: usize,
+    #[serde(default)]
+    accepted_prediction_tokens: usize,
+    #[serde(default)]
+    rejected_prediction_tokens: usize,
 }
 
 #[derive(Debug, Deserialize)]
-struct ZaiUsage {
+struct XaiUsage {
     pub prompt_tokens: usize,
     pub completion_tokens: usize,
+    #[serde(default)]
     prompt_tokens_details: PromptTokensDetails,
     #[serde(default)]
     completion_tokens_details: Option<CompletionTokensDetails>,
@@ -240,42 +216,79 @@ struct ZaiUsage {
 }
 
 #[derive(Debug, Deserialize)]
-struct ZaiStreamChunk {
+struct XaiMessage {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    role: Option<String>,
+    #[serde(default)]
+    refusal: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<ToolCall>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct XaiChoice {
+    message: XaiMessage,
+    finish_reason: String,
+    #[serde(default)]
+    index: Option<usize>,
+    #[serde(default)]
+    logprobs: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct XaiResponse {
+    choices: Vec<XaiChoice>,
+    usage: XaiUsage,
+    model: String,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    created: Option<u64>,
+    #[serde(default)]
+    object: Option<String>,
+    #[serde(default)]
+    system_fingerprint: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct XaiStreamChunk {
     id: Option<String>,
     object: Option<String>,
     created: Option<u64>,
     model: String,
-    choices: Vec<ZaiStreamChoice>,
+    choices: Vec<XaiStreamChoice>,
     #[serde(default)]
-    usage: Option<ZaiUsage>,
+    usage: Option<XaiUsage>,
 }
 
 #[derive(Debug, Deserialize)]
-struct ZaiStreamChoice {
+struct XaiStreamChoice {
     index: Option<usize>,
-    delta: ZaiStreamDelta,
+    delta: XaiStreamDelta,
     #[serde(default)]
     finish_reason: Option<String>,
+    #[serde(default)]
+    logprobs: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum ZaiStreamDelta {
-    ToolCalls {
-        tool_calls: Vec<ToolCall>,
-    },
-    Content {
-        role: String,
-        content: String,
-    },
-    Reasoning {
-        role: String,
-        reasoning_content: String,
-    },
+#[derive(Debug, Deserialize, Default)]
+struct XaiStreamDelta {
+    #[serde(default)]
+    role: Option<String>,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<ToolCall>>,
 }
 
-impl From<ZaiUsage> for Usage {
-    fn from(usage: ZaiUsage) -> Self {
+impl From<XaiUsage> for Usage {
+    fn from(usage: XaiUsage) -> Self {
         Self {
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
@@ -285,25 +298,28 @@ impl From<ZaiUsage> for Usage {
     }
 }
 
-impl TryFrom<ZaiResponse> for ModelResponse {
+impl TryFrom<XaiResponse> for ModelResponse {
     type Error = KongfuError;
 
-    fn try_from(response: ZaiResponse) -> Result<Self> {
+    fn try_from(response: XaiResponse) -> Result<Self> {
         let choice = response
             .choices
             .first()
-            .ok_or_else(|| KongfuError::ExecutionError("No choices in Zai response".to_string()))?;
+            .ok_or_else(|| KongfuError::ExecutionError("No choices in Xai response".to_string()))?;
 
         let mut content_blocks = Vec::new();
 
+        // Handle reasoning content (for reasoning models)
         if let Some(reasoning) = &choice.message.reasoning_content {
             content_blocks.push(ContentBlock::thinking(reasoning.clone()));
         }
 
+        // Handle regular content
         if let Some(text) = &choice.message.content {
             content_blocks.push(ContentBlock::text(text.clone()));
         }
 
+        // Handle tool calls
         if let Some(tool_calls) = &choice.message.tool_calls {
             for tool_call in tool_calls {
                 let args_map: HashMap<String, serde_json::Value> =
@@ -335,7 +351,7 @@ impl TryFrom<ZaiResponse> for ModelResponse {
     }
 }
 
-struct ZaiResponseStream {
+struct XaiResponseStream {
     byte_stream: Pin<Box<dyn Stream<Item = reqwest::Result<bytes::Bytes>> + Send>>,
     buffer: String,
     is_done: bool,
@@ -347,7 +363,7 @@ struct ZaiResponseStream {
     tool_calls: Vec<ToolCall>,
 }
 
-impl ZaiResponseStream {
+impl XaiResponseStream {
     fn new<S>(byte_stream: S, model: String) -> Self
     where
         S: Stream<Item = reqwest::Result<bytes::Bytes>> + Send + 'static,
@@ -414,17 +430,17 @@ impl ZaiResponseStream {
             let response = ModelResponse {
                 content: content_blocks,
                 model: self.model.clone(),
-                usage: self.usage.take(), // Include usage if available
+                usage: self.usage.take(),
                 finish_reason: self.finish_reason.clone(),
             };
             return Some(Ok(StreamingUpdate::Done(response)));
         }
 
-        match serde_json::from_str::<ZaiStreamChunk>(data_str) {
+        match serde_json::from_str::<XaiStreamChunk>(data_str) {
             Ok(chunk) => {
                 // Update model from the first chunk
                 if self.model.is_empty() {
-                    self.model = chunk.model;
+                    self.model = chunk.model.clone();
                 }
 
                 if let Some(usage) = chunk.usage {
@@ -437,47 +453,49 @@ impl ZaiResponseStream {
                         self.finish_reason = Some(reason.clone());
                     }
 
-                    match &choice.delta {
-                        ZaiStreamDelta::Reasoning {
-                            reasoning_content, ..
-                        } => {
-                            if !reasoning_content.is_empty() {
-                                self.thinking_content.push_str(reasoning_content);
-                                return Some(Ok(StreamingUpdate::Thinking(
-                                    reasoning_content.clone(),
-                                )));
-                            }
-                        }
-                        ZaiStreamDelta::Content { content, .. } => {
-                            if !content.is_empty() {
-                                self.response_content.push_str(content);
-                                return Some(Ok(StreamingUpdate::Content(content.clone())));
-                            }
-                        }
-                        ZaiStreamDelta::ToolCalls { tool_calls } => {
-                            for tool_call in tool_calls {
-                                // Check if we already have this tool call (by id)
-                                let existing_pos =
-                                    self.tool_calls.iter().position(|tc| tc.id == tool_call.id);
+                    let delta = &choice.delta;
 
-                                if let Some(pos) = existing_pos {
-                                    // Append to existing tool call's arguments
-                                    self.tool_calls[pos]
-                                        .function
-                                        .arguments
-                                        .push_str(&tool_call.function.arguments);
-                                } else {
-                                    // Add new tool call
-                                    self.tool_calls.push(tool_call.clone());
-                                }
+                    // Handle reasoning content (for reasoning models)
+                    if let Some(reasoning_content) = &delta.reasoning_content {
+                        if !reasoning_content.is_empty() {
+                            self.thinking_content.push_str(reasoning_content);
+                            return Some(Ok(StreamingUpdate::Thinking(
+                                reasoning_content.clone(),
+                            )));
+                        }
+                    }
 
-                                // Emit the tool call update
-                                // Note: We emit it when complete (when it has both id and arguments)
-                                if !tool_call.id.is_empty()
-                                    && !tool_call.function.arguments.is_empty()
-                                {
-                                    return Some(Ok(StreamingUpdate::ToolCall(tool_call.clone())));
-                                }
+                    // Handle regular content
+                    if let Some(content) = &delta.content {
+                        if !content.is_empty() {
+                            self.response_content.push_str(content);
+                            return Some(Ok(StreamingUpdate::Content(content.clone())));
+                        }
+                    }
+
+                    // Handle tool calls
+                    if let Some(tool_calls) = &delta.tool_calls {
+                        for tool_call in tool_calls {
+                            // Check if we already have this tool call (by id)
+                            let existing_pos =
+                                self.tool_calls.iter().position(|tc| tc.id == tool_call.id);
+
+                            if let Some(pos) = existing_pos {
+                                // Append to existing tool call's arguments
+                                self.tool_calls[pos]
+                                    .function
+                                    .arguments
+                                    .push_str(&tool_call.function.arguments);
+                            } else {
+                                // Add new tool call
+                                self.tool_calls.push(tool_call.clone());
+                            }
+
+                            // Emit the tool call update
+                            if !tool_call.id.is_empty()
+                                && !tool_call.function.arguments.is_empty()
+                            {
+                                return Some(Ok(StreamingUpdate::ToolCall(tool_call.clone())));
                             }
                         }
                     }
@@ -492,7 +510,7 @@ impl ZaiResponseStream {
     }
 }
 
-impl futures::Stream for ZaiResponseStream {
+impl futures::Stream for XaiResponseStream {
     type Item = Result<StreamingUpdate>;
 
     fn poll_next(
@@ -536,9 +554,9 @@ impl futures::Stream for ZaiResponseStream {
 }
 
 #[async_trait]
-impl Provider for Zai {
+impl Provider for Xai {
     fn name(&self) -> ProviderName {
-        ProviderName::Zai
+        ProviderName::Xai
     }
 
     async fn generate(
@@ -550,8 +568,8 @@ impl Provider for Zai {
         let body = self.build_request_body(messages, tools, options, false);
         let response = self.client.post("chat/completions", &body).await?;
 
-        let api_response: ZaiResponse = response.json().await.map_err(|e| {
-            KongfuError::ResponseParseError(format!("Failed to parse Zai response: {}", e))
+        let api_response: XaiResponse = response.json().await.map_err(|e| {
+            KongfuError::ResponseParseError(format!("Failed to parse Xai response: {}", e))
         })?;
 
         Ok(api_response.try_into()?)
@@ -559,7 +577,7 @@ impl Provider for Zai {
 }
 
 #[async_trait]
-impl StreamingProvider for Zai {
+impl StreamingProvider for Xai {
     async fn stream_generate(
         &self,
         messages: &[Message],
@@ -570,7 +588,7 @@ impl StreamingProvider for Zai {
         let response = self.client.post("chat/completions", &body).await?;
 
         let byte_stream = response.bytes_stream();
-        let stream = ZaiResponseStream::new(byte_stream, self.config.model.clone());
+        let stream = XaiResponseStream::new(byte_stream, self.config.model.clone());
 
         Ok(Box::new(stream))
     }
@@ -584,20 +602,21 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "needs api key and takes time"]
-    async fn test_zai_generate() {
-        let zai = Zai::builder()
-            .base_url("https://api.z.ai/api/coding/paas/v4")
-            .model("glm-4.7")
-            .temperature(1.0)
-            .max_tokens(48000)
+    async fn test_xai_generate() {
+        let xai = Xai::builder()
+            .model("grok-4-1-fast-reasoning")
+            .temperature(0.7)
+            .max_tokens(1000)
             .build()
             .unwrap();
+
         let options = RequestOptions { tool_choice: None };
         let messages = vec![
             Message::system("You are a helpful AI helper"),
-            Message::user("Explain what's an LLM in short?"),
+            Message::user("Explain what an LLM is in 20 words"),
         ];
-        let resp = zai.generate(&messages, None, &options).await;
+
+        let resp = xai.generate(&messages, None, &options).await;
         match resp {
             Ok(response) => {
                 let content = &response.content;
@@ -620,14 +639,13 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "needs api key and takes time"]
-    async fn test_zai_stream_generate() {
+    async fn test_xai_stream_generate() {
         use futures::StreamExt;
 
-        let zai = Zai::builder()
-            .base_url("https://api.z.ai/api/coding/paas/v4")
-            .model("glm-4.7")
-            .temperature(1.0)
-            .max_tokens(48_000)
+        let xai = Xai::builder()
+            .model("grok-4-1-fast-reasoning")
+            .temperature(0.7)
+            .max_tokens(1000)
             .build()
             .unwrap();
 
@@ -635,51 +653,35 @@ mod tests {
 
         let messages = vec![
             Message::system("You are a helpful AI helper"),
-            Message::user("Explain what's an LLM in short?"),
+            Message::user("Explain what an LLM is in 20 words"),
         ];
 
-        let mut stream = zai
+        let mut stream = xai
             .stream_generate(&messages, None, &options)
             .await
             .unwrap();
 
-        let mut thinking_content = String::new();
         let mut response_content = String::new();
-        let mut thinking_count = 0;
         let mut content_count = 0;
-        let mut total_results = 0;
         let mut final_response = None;
 
         while let Some(update_result) = stream.next().await {
-            total_results += 1;
             match update_result {
-                Ok(StreamingUpdate::Thinking(chunk)) => {
-                    thinking_count += 1;
-                    thinking_content.push_str(&chunk);
-                    if thinking_count == 1 {
-                        print!("<think> {}", chunk);
-                    } else {
-                        print!("{}", chunk);
-                    }
-                    std::io::stdout().flush().unwrap();
-                }
                 Ok(StreamingUpdate::Content(chunk)) => {
                     content_count += 1;
                     response_content.push_str(&chunk);
-                    if content_count == 1 && thinking_count > 0 {
-                        print!("\n</think>\n{}", chunk);
-                    } else {
-                        print!("{}", chunk); // Stream content in real-time
-                    }
+                    print!("{}", chunk);
                     std::io::stdout().flush().unwrap();
-                }
-                Ok(StreamingUpdate::ToolCall(_tool_call)) => {
-                    // Handle tool calls if any
-                    println!("\n[Tool call received]");
                 }
                 Ok(StreamingUpdate::Done(response)) => {
                     final_response = Some(response);
                     println!("\n[Stream complete]");
+                }
+                Ok(StreamingUpdate::ToolCall(_tool_call)) => {
+                    println!("\n[Tool call received]");
+                }
+                Ok(StreamingUpdate::Thinking(_chunk)) => {
+                    // Handle thinking if needed
                 }
                 Err(e) => {
                     eprintln!("Stream error: {}", e);
@@ -688,12 +690,7 @@ mod tests {
         }
 
         println!("\n=== Stream Summary ===");
-        println!("Total updates: {}", total_results);
-        println!("Thinking chunks: {}", thinking_count);
         println!("Content chunks: {}", content_count);
-        if !thinking_content.is_empty() {
-            println!("Total thinking: {} bytes", thinking_content.len());
-        }
         println!("Total content: {} bytes", response_content.len());
 
         if let Some(response) = &final_response {
@@ -703,97 +700,15 @@ mod tests {
             }
         }
 
-        assert!(
-            content_count > 0 || thinking_count > 0,
-            "Should receive at least one chunk"
-        );
-    }
-
-    #[tokio::test]
-    #[ignore = "needs api key and takes time"]
-    async fn test_zai_stream_generate_with_tools() {
-        use futures::StreamExt;
-
-        let zai = Zai::builder()
-            .base_url("https://open.bigmodel.cn/api/paas/v4")
-            .model("glm-4.7-flash")
-            .temperature(1.0)
-            .max_tokens(48_000)
-            .build()
-            .unwrap();
-
-        let tools = vec![Tool::Function(crate::provider::types::FunctionDefinition {
-            name: "get_current_time".to_string(),
-            description: "Get the current time".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {}
-            }),
-        })];
-
-        let options = RequestOptions {
-            tool_choice: Some(ToolChoice::Auto),
-        };
-
-        let messages = vec![
-            Message::system("You are a helpful AI helper"),
-            Message::user("What time is it? Use the get_current_time tool."),
-        ];
-
-        let mut stream = zai
-            .stream_generate(&messages, Some(&tools), &options)
-            .await
-            .unwrap();
-
-        let mut tool_call_count = 0;
-        let mut content_count = 0;
-        let mut final_response = None;
-
-        while let Some(update_result) = stream.next().await {
-            match update_result {
-                Ok(StreamingUpdate::ToolCall(_tool_call)) => {
-                    tool_call_count += 1;
-                    println!("\n[Tool call received]");
-                }
-                Ok(StreamingUpdate::Content(_chunk)) => {
-                    content_count += 1;
-                }
-                Ok(StreamingUpdate::Done(response)) => {
-                    final_response = Some(response);
-                    println!("\n[Stream complete]");
-                }
-                Ok(StreamingUpdate::Thinking(_chunk)) => {
-                    // Ignore thinking for this test
-                }
-                Err(e) => {
-                    eprintln!("Stream error: {}", e);
-                }
-            }
-        }
-
-        println!("\n=== Tool Call Test Summary ===");
-        println!("Tool calls received: {}", tool_call_count);
-        println!("Content chunks: {}", content_count);
-
-        // Verify we got a final response
-        assert!(final_response.is_some(), "Should receive final response");
-
-        // Verify the response contains tool use blocks
-        if let Some(response) = &final_response {
-            let has_tool_use = response
-                .content
-                .iter()
-                .any(|block| matches!(block, ContentBlock::ToolUse(_)));
-            assert!(has_tool_use, "Response should contain tool use blocks");
-        }
+        assert!(content_count > 0, "Should receive at least one chunk");
     }
 
     #[test]
     fn test_build_request_body() {
-        let zai = Zai::builder()
+        let xai = Xai::builder()
             .api_key("test-key")
-            .base_url("https://api.test.com")
-            .model("test-model")
+            .base_url("https://api.x.ai/v1")
+            .model("grok-4-1-fast-reasoning")
             .temperature(0.7)
             .max_tokens(1000)
             .top_p(0.9)
@@ -811,50 +726,47 @@ mod tests {
         };
 
         // Test with stream=false
-        let body = zai.build_request_body(&messages, Some(&tools), &options, false);
+        let body = xai.build_request_body(&messages, Some(&tools), &options, false);
 
-        assert_eq!(body["model"], "test-model");
+        assert_eq!(body["model"], "grok-4-1-fast-reasoning");
         assert_eq!(body["stream"], false);
         assert_eq!(body["temperature"].as_f64().unwrap(), 0.7);
-        assert_eq!(body["max_tokens"], 1000);
+        assert_eq!(body["max_completion_tokens"], 1000);
         assert_eq!(body["top_p"].as_f64().unwrap(), 0.9);
         assert!(body["tool_choice"].is_string());
         assert!(body["tools"].is_array());
         assert_eq!(body["messages"].as_array().unwrap().len(), 1);
 
         // Test with stream=true
-        let body_stream = zai.build_request_body(&messages, None, &options, true);
+        let body_stream = xai.build_request_body(&messages, None, &options, true);
         assert_eq!(body_stream["stream"], true);
 
         // Test without optional parameters
-        let zai_minimal = Zai::builder().api_key("test-key").build().unwrap();
+        let xai_minimal = Xai::builder().api_key("test-key").build().unwrap();
 
-        let body_minimal = zai_minimal.build_request_body(
+        let body_minimal = xai_minimal.build_request_body(
             &messages,
             None,
             &RequestOptions { tool_choice: None },
             false,
         );
 
-        assert_eq!(body_minimal["model"], "gpt-4");
-        assert!((body_minimal["temperature"].as_f64().unwrap() - 0.7).abs() < 0.01);
-        assert!(body_minimal.get("max_tokens").is_none());
+        assert_eq!(body_minimal["model"], "grok-4-1-fast-reasoning");
+        assert!(body_minimal.get("temperature").is_some()); // temperature is optional
+        assert!(body_minimal.get("max_completion_tokens").is_none());
         assert!(body_minimal.get("top_p").is_none());
         assert!(body_minimal.get("tool_choice").is_none());
         assert!(body_minimal.get("tools").is_none());
     }
 
     #[test]
-    fn test_zai_client_endpoint() {
-        let client = ZaiClient::new(
-            "test-key".to_string(),
-            "https://api.test.com/v1/".to_string(),
-        );
+    fn test_xai_client_endpoint() {
+        let client = XaiClient::new("test-key".to_string(), "https://api.x.ai/v1/".to_string());
 
         assert_eq!(
             client.endpoint("chat/completions"),
-            "https://api.test.com/v1/chat/completions"
+            "https://api.x.ai/v1/chat/completions"
         );
-        assert_eq!(client.endpoint("/models"), "https://api.test.com/v1/models");
+        assert_eq!(client.endpoint("/models"), "https://api.x.ai/v1/models");
     }
 }

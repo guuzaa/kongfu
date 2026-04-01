@@ -1,3 +1,43 @@
+//! # Kongfu Procedural Macros
+//!
+//! This crate provides procedural macros for the kongfu framework:
+//!
+//! - `#[tool]` - Converts an async function into a complete tool implementation
+//! - `#[derive(ToolParams)]` - Generates JSON schema for parameter structs
+//!
+//! ## Parameter Documentation
+//!
+//! Both macros extract documentation from doc comments (/// ...) to include
+//! in the generated JSON schemas. This is critical for AI models to understand
+//! how to use your tools.
+//!
+//! ### With #[tool]
+//!
+//! ```rust
+//! use kongfu::tool;
+//!
+//! #[tool]
+//! async fn search(
+//!     /// The search query string  ← Included in schema
+//!     query: String,
+//! ) -> Result<String, Box<dyn std::error::Error>> {
+//!     Ok(format!("Searching: {}", query))
+//! }
+//! ```
+//!
+//! ### With #[derive(ToolParams)]
+//!
+//! ```rust
+//! use kongfu_macros::ToolParams;
+//! use serde::Deserialize;
+//!
+//! #[derive(ToolParams, Deserialize)]
+//! struct SearchParams {
+//!     /// The search query string  ← Included in schema
+//!     query: String,
+//! }
+//! ```
+
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
@@ -82,6 +122,21 @@ fn generate_schema_impl(input: &DeriveInput) -> TokenStream2 {
 }
 
 /// Generate schema property for a field
+///
+/// Creates a JSON schema property entry for a single struct field in the ToolParams derive macro.
+/// The property includes:
+/// - The field's JSON type (mapped from Rust type)
+/// - The field's description (extracted from doc comments via extract_description())
+///
+/// # Example Output
+///
+/// For a field `/// The user's name\nname: String`, generates:
+/// ```rust
+/// "name": {
+///     "type": "string",
+///     "description": "The user's name"
+/// }
+/// ```
 fn generate_property(field: &Field) -> TokenStream2 {
     let name = field.ident.as_ref().unwrap();
     let name_str = name.to_string();
@@ -137,6 +192,19 @@ fn generate_property(field: &Field) -> TokenStream2 {
 }
 
 /// Extract description from field attributes
+///
+/// For the ToolParams derive macro, this extracts the doc comment from struct fields.
+/// Similar to extract_param_description() but for struct fields instead of function parameters.
+///
+/// # Example
+///
+/// ```rust
+/// #[derive(ToolParams)]
+/// struct SearchParams {
+///     /// The search query  ← This will be extracted
+///     query: String,
+/// }
+/// ```
 fn extract_description(field: &Field) -> String {
     // First try doc comments
     for attr in &field.attrs {
@@ -210,6 +278,10 @@ fn get_field_type_info(field: &Field) -> (String, bool) {
 /// This generates:
 /// - A `MyToolParams` struct with `#[derive(ToolParams, Deserialize)]`
 /// - A `MyTool` struct implementing `ToolHandler`
+///
+/// # Parameter Documentation
+///
+/// Doc comments on parameters are extracted and included in the JSON schema:
 #[proc_macro_attribute]
 pub fn tool(args: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as ItemFn);
@@ -221,6 +293,12 @@ pub fn tool(args: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// Generate the tool implementation from an async function
+///
+/// This is the core function that transforms a simple async function into a complete tool:
+/// 1. Extracts tool metadata (name, description, parameters)
+/// 2. Generates a Params struct with ToolParams implementation
+/// 3. Generates a Tool struct implementing ToolHandler trait
+/// 4. Preserves the original function body as the execute logic
 fn generate_tool(func: ItemFn, args: proc_macro2::TokenStream) -> TokenStream2 {
     let func_name = &func.sig.ident;
 
@@ -264,6 +342,13 @@ fn generate_tool(func: ItemFn, args: proc_macro2::TokenStream) -> TokenStream2 {
     let output_type = extract_output_type(&func.sig.output);
 
     // Generate schema for the parameters
+    // Each parameter gets a JSON schema entry with:
+    // - type: Mapped from Rust type (String -> "string", i32 -> "integer", etc.)
+    // - description: Extracted from the parameter's doc comment (/// ...)
+    //
+    // IMPORTANT: The description comes from extract_param_description(), which looks
+    // for doc comments before each parameter. Without doc comments, the description
+    // defaults to "Parameter", which is not helpful for AI models.
     let schema_properties: Vec<TokenStream2> = params
         .iter()
         .map(|p| {
@@ -437,6 +522,12 @@ fn extract_tool_name(args: &proc_macro2::TokenStream, func_name: &syn::Ident) ->
 }
 
 /// Extract description from function doc comments
+///
+/// Extracts the function's doc comment (/// ...) to use as the tool's description.
+/// This description appears in the JSON schema and helps AI models understand what
+/// the tool does.
+///
+/// Generates a tool with: `description: "Searches the web for documents matching the query Returns the top 10 results with titles and snippets"`
 fn extract_function_description(attrs: &[Attribute]) -> String {
     let mut docs = Vec::new();
 
@@ -463,6 +554,17 @@ fn extract_function_description(attrs: &[Attribute]) -> String {
 }
 
 /// Parameter information extracted from function signature
+///
+/// Holds all metadata about a function parameter needed to generate the tool code:
+/// - `name`: The parameter identifier (e.g., `query`)
+/// - `ty`: The parameter type (e.g., `String`, `Option<i32>`)
+/// - `description`: Extracted from the parameter's doc comment (/// ...)
+///
+/// # Note on Descriptions
+///
+/// The `description` field comes from doc comments before the parameter.
+/// If no doc comment is present, it defaults to "Parameter" which provides
+/// no useful information to AI models. Always document your parameters!
 struct ParameterInfo {
     name: syn::Ident,
     ty: Type,
@@ -470,6 +572,19 @@ struct ParameterInfo {
 }
 
 /// Extract parameters from function inputs
+///
+/// Parses the function signature to extract parameter information including:
+/// - Parameter name
+/// - Parameter type
+/// - Parameter description (from doc comments)
+///
+/// # Important: Parameter Doc Comments
+///
+/// Each parameter's doc comment is extracted via extract_param_description().
+/// These descriptions are crucial for generating accurate JSON schemas that AI models
+/// can understand.
+///
+/// Returns ParameterInfo structs with descriptions extracted from the /// comments.
 fn extract_parameters(
     inputs: &syn::punctuated::Punctuated<FnArg, syn::token::Comma>,
 ) -> Vec<ParameterInfo> {
@@ -494,6 +609,36 @@ fn extract_parameters(
 }
 
 /// Extract parameter description from attributes
+///
+/// This function looks for doc comments (/// ...) on function parameters and extracts
+/// their content. These descriptions are included in the generated JSON schema and help
+/// AI models understand what each parameter does.
+///
+/// # Example
+///
+/// ```rust
+/// #[tool]
+/// async fn search(
+///     /// The search query string  ← This will be extracted
+///     query: String,
+/// ) -> Result<String, Box<dyn std::error::Error>> {
+///     Ok(format!("Searching for: {}", query))
+/// }
+/// ```
+///
+/// Generates:
+/// ```json
+/// {
+///   "properties": {
+///     "query": {
+///       "type": "string",
+///       "description": "The search query string"  ← From the doc comment
+///     }
+///   }
+/// }
+/// ```
+///
+/// If no doc comment is present, returns "Parameter" as a generic fallback.
 fn extract_param_description(attrs: &[Attribute]) -> String {
     for attr in attrs {
         if attr.path().is_ident("doc") {

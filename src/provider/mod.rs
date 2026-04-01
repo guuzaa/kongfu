@@ -1,5 +1,6 @@
 pub mod ollama;
 mod types;
+pub mod xai;
 pub mod zai;
 
 pub use types::{
@@ -8,4 +9,5 @@ pub use types::{
 };
 
 pub use ollama::{Ollama, OllamaBuilder};
+pub use xai::{Xai, XaiBuilder};
 pub use zai::{Zai, ZaiBuilder};

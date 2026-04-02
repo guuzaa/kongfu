@@ -1,5 +1,6 @@
 mod agent;
 mod error;
+pub(crate) mod http_client;
 mod memory;
 mod message;
 pub mod provider;

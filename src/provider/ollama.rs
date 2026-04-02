@@ -1,4 +1,5 @@
 use crate::error::{KongfuError, Result};
+use crate::http_client::HttpClient;
 use crate::message::{ContentBlock, Message, Role, ToolUseBlock};
 use crate::provider::types::{StreamingProvider, StreamingUpdate};
 use crate::provider::{
@@ -59,58 +60,14 @@ impl From<&Message> for OllamaRequestMessage {
     }
 }
 
-struct OllamaClient {
-    http: reqwest::Client,
-    base_url: String,
-}
-
-impl OllamaClient {
-    fn new(base_url: String) -> Self {
-        Self {
-            http: reqwest::Client::new(),
-            base_url,
-        }
-    }
-
-    fn endpoint(&self, path: &str) -> String {
-        format!(
-            "{}/{}",
-            self.base_url.trim_end_matches('/'),
-            path.trim_start_matches('/')
-        )
-    }
-
-    async fn post(&self, path: &str, body: &serde_json::Value) -> Result<reqwest::Response> {
-        let response = self
-            .http
-            .post(self.endpoint(path))
-            .header("Content-Type", "application/json")
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| KongfuError::NetworkError(format!("Ollama API request failed: {}", e)))?;
-
-        if !response.status().is_success() {
-            let code = response.status().as_u16();
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(KongfuError::ApiError {
-                status: code,
-                message: error_text,
-            });
-        }
-
-        Ok(response)
-    }
-}
-
 pub struct Ollama {
     config: ModelConfig,
-    client: OllamaClient,
+    client: HttpClient,
 }
 
 impl Ollama {
     pub fn new(config: ModelConfig) -> Self {
-        let client = OllamaClient::new(config.base_url.clone());
+        let client = HttpClient::new(None, config.base_url.clone());
         Self { config, client }
     }
 
@@ -213,7 +170,7 @@ impl OllamaBuilder {
             top_p: self.top_p,
         };
 
-        let client = OllamaClient::new(config.base_url.clone());
+        let client = HttpClient::new(None, config.base_url.clone());
 
         Ollama { config, client }
     }
@@ -743,20 +700,6 @@ mod tests {
 
         assert_eq!(body_minimal["model"], "llama3.2");
         assert!((body_minimal["options"]["temperature"].as_f64().unwrap() - 0.7).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_ollama_client_endpoint() {
-        let client = OllamaClient::new("http://127.0.0.1:11434/".to_string());
-
-        assert_eq!(
-            client.endpoint("api/chat"),
-            "http://127.0.0.1:11434/api/chat"
-        );
-        assert_eq!(
-            client.endpoint("/api/tags"),
-            "http://127.0.0.1:11434/api/tags"
-        );
     }
 
     #[test]

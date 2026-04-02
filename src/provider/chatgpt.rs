@@ -1,4 +1,5 @@
 use crate::error::{KongfuError, Result};
+use crate::http_client::HttpClient;
 use crate::message::{ContentBlock, Message, ToolUseBlock};
 use crate::provider::types::{StreamingProvider, StreamingUpdate};
 use crate::provider::{
@@ -11,61 +12,14 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::pin::Pin;
 
-struct ChatgptClient {
-    http: reqwest::Client,
-    api_key: String,
-    base_url: String,
-}
-
-impl ChatgptClient {
-    fn new(api_key: String, base_url: String) -> Self {
-        Self {
-            http: reqwest::Client::new(),
-            api_key,
-            base_url,
-        }
-    }
-
-    fn endpoint(&self, path: &str) -> String {
-        format!(
-            "{}/{}",
-            self.base_url.trim_end_matches('/'),
-            path.trim_start_matches('/')
-        )
-    }
-
-    async fn post(&self, path: &str, body: &serde_json::Value) -> Result<reqwest::Response> {
-        let response = self
-            .http
-            .post(self.endpoint(path))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| KongfuError::NetworkError(format!("ChatGPT API request failed: {}", e)))?;
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(KongfuError::ApiError {
-                status,
-                message: error_text,
-            });
-        }
-
-        Ok(response)
-    }
-}
-
 pub struct Chatgpt {
     config: ModelConfig,
-    client: ChatgptClient,
+    client: HttpClient,
 }
 
 impl Chatgpt {
     pub fn new(config: ModelConfig) -> Self {
-        let client = ChatgptClient::new(config.api_key.clone(), config.base_url.clone());
+        let client = HttpClient::new(Some(config.api_key.clone()), config.base_url.clone());
         Self { config, client }
     }
 
@@ -180,7 +134,7 @@ impl ChatgptBuilder {
             top_p: self.top_p,
         };
 
-        let client = ChatgptClient::new(config.api_key.clone(), config.base_url.clone());
+        let client = HttpClient::new(Some(config.api_key.clone()), config.base_url.clone());
 
         Ok(Chatgpt { config, client })
     }
@@ -753,22 +707,5 @@ mod tests {
         assert!(body_minimal.get("top_p").is_none());
         assert!(body_minimal.get("tool_choice").is_none());
         assert!(body_minimal.get("tools").is_none());
-    }
-
-    #[test]
-    fn test_chatgpt_client_endpoint() {
-        let client = ChatgptClient::new(
-            "test-key".to_string(),
-            "https://api.openai.com/v1/".to_string(),
-        );
-
-        assert_eq!(
-            client.endpoint("chat/completions"),
-            "https://api.openai.com/v1/chat/completions"
-        );
-        assert_eq!(
-            client.endpoint("/models"),
-            "https://api.openai.com/v1/models"
-        );
     }
 }

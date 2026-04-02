@@ -11,13 +11,13 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::pin::Pin;
 
-struct XaiClient {
+struct ChatgptClient {
     http: reqwest::Client,
     api_key: String,
     base_url: String,
 }
 
-impl XaiClient {
+impl ChatgptClient {
     fn new(api_key: String, base_url: String) -> Self {
         Self {
             http: reqwest::Client::new(),
@@ -43,7 +43,7 @@ impl XaiClient {
             .json(body)
             .send()
             .await
-            .map_err(|e| KongfuError::NetworkError(format!("Xai API request failed: {}", e)))?;
+            .map_err(|e| KongfuError::NetworkError(format!("ChatGPT API request failed: {}", e)))?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
@@ -58,19 +58,19 @@ impl XaiClient {
     }
 }
 
-pub struct Xai {
+pub struct Chatgpt {
     config: ModelConfig,
-    client: XaiClient,
+    client: ChatgptClient,
 }
 
-impl Xai {
+impl Chatgpt {
     pub fn new(config: ModelConfig) -> Self {
-        let client = XaiClient::new(config.api_key.clone(), config.base_url.clone());
+        let client = ChatgptClient::new(config.api_key.clone(), config.base_url.clone());
         Self { config, client }
     }
 
-    pub fn builder() -> XaiBuilder {
-        XaiBuilder::new()
+    pub fn builder() -> ChatgptBuilder {
+        ChatgptBuilder::new()
     }
 
     pub fn config(&self) -> &ModelConfig {
@@ -92,7 +92,7 @@ impl Xai {
         });
 
         if let Some(max_tokens) = self.config.max_tokens {
-            body["max_completion_tokens"] = json!(max_tokens);
+            body["max_tokens"] = json!(max_tokens);
         }
 
         if let Some(top_p) = self.config.top_p {
@@ -112,7 +112,7 @@ impl Xai {
 }
 
 #[derive(Default)]
-pub struct XaiBuilder {
+pub struct ChatgptBuilder {
     model: Option<String>,
     api_key: Option<String>,
     base_url: Option<String>,
@@ -121,7 +121,7 @@ pub struct XaiBuilder {
     top_p: Option<f64>,
 }
 
-impl XaiBuilder {
+impl ChatgptBuilder {
     pub fn new() -> Self {
         Self::default()
     }
@@ -156,22 +156,20 @@ impl XaiBuilder {
         self
     }
 
-    pub fn build(self) -> Result<Xai> {
+    pub fn build(self) -> Result<Chatgpt> {
         let api_key = self
             .api_key
-            .or_else(|| std::env::var("XAI_API_KEY").ok())
+            .or_else(|| std::env::var("OPENAI_API_KEY").ok())
             .ok_or_else(|| KongfuError::InvalidConfig(
-                "api_key is required. Set it via XaiBuilder::api_key() or XAI_API_KEY environment variable".to_string()
+                "api_key is required. Set it via ChatgptBuilder::api_key() or OPENAI_API_KEY environment variable".to_string()
             ))?;
 
         let base_url = self
             .base_url
-            .or_else(|| std::env::var("XAI_BASE_URL").ok())
-            .unwrap_or_else(|| "https://api.x.ai/v1".to_string());
+            .or_else(|| std::env::var("OPENAI_BASE_URL").ok())
+            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
 
-        let model = self
-            .model
-            .unwrap_or_else(|| "grok-4-1-fast-reasoning".to_string());
+        let model = self.model.unwrap_or_else(|| "gpt-4o-mini".to_string());
 
         let config = ModelConfig {
             model,
@@ -182,9 +180,9 @@ impl XaiBuilder {
             top_p: self.top_p,
         };
 
-        let client = XaiClient::new(config.api_key.clone(), config.base_url.clone());
+        let client = ChatgptClient::new(config.api_key.clone(), config.base_url.clone());
 
-        Ok(Xai { config, client })
+        Ok(Chatgpt { config, client })
     }
 }
 
@@ -207,7 +205,7 @@ struct CompletionTokensDetails {
 }
 
 #[derive(Debug, Deserialize)]
-struct XaiUsage {
+struct ChatgptUsage {
     pub prompt_tokens: usize,
     pub completion_tokens: usize,
     #[serde(default)]
@@ -218,7 +216,7 @@ struct XaiUsage {
 }
 
 #[derive(Debug, Deserialize)]
-struct XaiMessage {
+struct ChatgptMessage {
     #[serde(default)]
     content: Option<String>,
     #[serde(default)]
@@ -232,8 +230,8 @@ struct XaiMessage {
 }
 
 #[derive(Debug, Deserialize)]
-struct XaiChoice {
-    message: XaiMessage,
+struct ChatgptChoice {
+    message: ChatgptMessage,
     finish_reason: String,
     #[serde(default)]
     index: Option<usize>,
@@ -242,9 +240,9 @@ struct XaiChoice {
 }
 
 #[derive(Debug, Deserialize)]
-struct XaiResponse {
-    choices: Vec<XaiChoice>,
-    usage: XaiUsage,
+struct ChatgptResponse {
+    choices: Vec<ChatgptChoice>,
+    usage: ChatgptUsage,
     model: String,
     #[serde(default)]
     id: Option<String>,
@@ -257,20 +255,20 @@ struct XaiResponse {
 }
 
 #[derive(Debug, Deserialize)]
-struct XaiStreamChunk {
+struct ChatgptStreamChunk {
     id: Option<String>,
     object: Option<String>,
     created: Option<u64>,
     model: String,
-    choices: Vec<XaiStreamChoice>,
+    choices: Vec<ChatgptStreamChoice>,
     #[serde(default)]
-    usage: Option<XaiUsage>,
+    usage: Option<ChatgptUsage>,
 }
 
 #[derive(Debug, Deserialize)]
-struct XaiStreamChoice {
+struct ChatgptStreamChoice {
     index: Option<usize>,
-    delta: XaiStreamDelta,
+    delta: ChatgptStreamDelta,
     #[serde(default)]
     finish_reason: Option<String>,
     #[serde(default)]
@@ -278,7 +276,7 @@ struct XaiStreamChoice {
 }
 
 #[derive(Debug, Deserialize, Default)]
-struct XaiStreamDelta {
+struct ChatgptStreamDelta {
     #[serde(default)]
     role: Option<String>,
     #[serde(default)]
@@ -289,8 +287,8 @@ struct XaiStreamDelta {
     tool_calls: Option<Vec<ToolCall>>,
 }
 
-impl From<XaiUsage> for Usage {
-    fn from(usage: XaiUsage) -> Self {
+impl From<ChatgptUsage> for Usage {
+    fn from(usage: ChatgptUsage) -> Self {
         Self {
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
@@ -300,14 +298,13 @@ impl From<XaiUsage> for Usage {
     }
 }
 
-impl TryFrom<XaiResponse> for ModelResponse {
+impl TryFrom<ChatgptResponse> for ModelResponse {
     type Error = KongfuError;
 
-    fn try_from(response: XaiResponse) -> Result<Self> {
-        let choice = response
-            .choices
-            .first()
-            .ok_or_else(|| KongfuError::ExecutionError("No choices in Xai response".to_string()))?;
+    fn try_from(response: ChatgptResponse) -> Result<Self> {
+        let choice = response.choices.first().ok_or_else(|| {
+            KongfuError::ExecutionError("No choices in ChatGPT response".to_string())
+        })?;
 
         let mut content_blocks = Vec::new();
 
@@ -353,7 +350,7 @@ impl TryFrom<XaiResponse> for ModelResponse {
     }
 }
 
-struct XaiResponseStream {
+struct ChatgptResponseStream {
     byte_stream: Pin<Box<dyn Stream<Item = reqwest::Result<bytes::Bytes>> + Send>>,
     buffer: String,
     is_done: bool,
@@ -365,7 +362,7 @@ struct XaiResponseStream {
     tool_calls: Vec<ToolCall>,
 }
 
-impl XaiResponseStream {
+impl ChatgptResponseStream {
     fn new<S>(byte_stream: S, model: String) -> Self
     where
         S: Stream<Item = reqwest::Result<bytes::Bytes>> + Send + 'static,
@@ -438,7 +435,7 @@ impl XaiResponseStream {
             return Some(Ok(StreamingUpdate::Done(response)));
         }
 
-        match serde_json::from_str::<XaiStreamChunk>(data_str) {
+        match serde_json::from_str::<ChatgptStreamChunk>(data_str) {
             Ok(chunk) => {
                 // Update model from the first chunk
                 if self.model.is_empty() {
@@ -509,7 +506,7 @@ impl XaiResponseStream {
     }
 }
 
-impl futures::Stream for XaiResponseStream {
+impl futures::Stream for ChatgptResponseStream {
     type Item = Result<StreamingUpdate>;
 
     fn poll_next(
@@ -553,9 +550,9 @@ impl futures::Stream for XaiResponseStream {
 }
 
 #[async_trait]
-impl Provider for Xai {
+impl Provider for Chatgpt {
     fn name(&self) -> ProviderName {
-        ProviderName::Xai
+        ProviderName::OpenAI
     }
 
     async fn generate(
@@ -567,8 +564,8 @@ impl Provider for Xai {
         let body = self.build_request_body(messages, tools, options, false);
         let response = self.client.post("chat/completions", &body).await?;
 
-        let api_response: XaiResponse = response.json().await.map_err(|e| {
-            KongfuError::ResponseParseError(format!("Failed to parse Xai response: {}", e))
+        let api_response: ChatgptResponse = response.json().await.map_err(|e| {
+            KongfuError::ResponseParseError(format!("Failed to parse ChatGPT response: {}", e))
         })?;
 
         Ok(api_response.try_into()?)
@@ -576,7 +573,7 @@ impl Provider for Xai {
 }
 
 #[async_trait]
-impl StreamingProvider for Xai {
+impl StreamingProvider for Chatgpt {
     async fn stream_generate(
         &self,
         messages: &[Message],
@@ -587,7 +584,7 @@ impl StreamingProvider for Xai {
         let response = self.client.post("chat/completions", &body).await?;
 
         let byte_stream = response.bytes_stream();
-        let stream = XaiResponseStream::new(byte_stream, self.config.model.clone());
+        let stream = ChatgptResponseStream::new(byte_stream, self.config.model.clone());
 
         Ok(Box::new(stream))
     }
@@ -601,9 +598,9 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "needs api key and takes time"]
-    async fn test_xai_generate() {
-        let xai = Xai::builder()
-            .model("grok-4-1-fast-reasoning")
+    async fn test_chatgpt_generate() {
+        let chatgpt = Chatgpt::builder()
+            .model("gpt-4o-mini")
             .temperature(0.7)
             .max_tokens(1000)
             .build()
@@ -615,7 +612,7 @@ mod tests {
             Message::user("Explain what an LLM is in 20 words"),
         ];
 
-        let resp = xai.generate(&messages, None, &options).await;
+        let resp = chatgpt.generate(&messages, None, &options).await;
         match resp {
             Ok(response) => {
                 let content = &response.content;
@@ -638,11 +635,11 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "needs api key and takes time"]
-    async fn test_xai_stream_generate() {
+    async fn test_chatgpt_stream_generate() {
         use futures::StreamExt;
 
-        let xai = Xai::builder()
-            .model("grok-4-1-fast-reasoning")
+        let chatgpt = Chatgpt::builder()
+            .model("gpt-4o-mini")
             .temperature(0.7)
             .max_tokens(1000)
             .build()
@@ -655,7 +652,7 @@ mod tests {
             Message::user("Explain what an LLM is in 20 words"),
         ];
 
-        let mut stream = xai
+        let mut stream = chatgpt
             .stream_generate(&messages, None, &options)
             .await
             .unwrap();
@@ -704,10 +701,10 @@ mod tests {
 
     #[test]
     fn test_build_request_body() {
-        let xai = Xai::builder()
+        let chatgpt = Chatgpt::builder()
             .api_key("test-key")
-            .base_url("https://api.x.ai/v1")
-            .model("grok-4-1-fast-reasoning")
+            .base_url("https://api.openai.com/v1")
+            .model("gpt-4o-mini")
             .temperature(0.7)
             .max_tokens(1000)
             .top_p(0.9)
@@ -725,47 +722,53 @@ mod tests {
         };
 
         // Test with stream=false
-        let body = xai.build_request_body(&messages, Some(&tools), &options, false);
+        let body = chatgpt.build_request_body(&messages, Some(&tools), &options, false);
 
-        assert_eq!(body["model"], "grok-4-1-fast-reasoning");
+        assert_eq!(body["model"], "gpt-4o-mini");
         assert_eq!(body["stream"], false);
         assert_eq!(body["temperature"].as_f64().unwrap(), 0.7);
-        assert_eq!(body["max_completion_tokens"], 1000);
+        assert_eq!(body["max_tokens"], 1000);
         assert_eq!(body["top_p"].as_f64().unwrap(), 0.9);
         assert!(body["tool_choice"].is_string());
         assert!(body["tools"].is_array());
         assert_eq!(body["messages"].as_array().unwrap().len(), 1);
 
         // Test with stream=true
-        let body_stream = xai.build_request_body(&messages, None, &options, true);
+        let body_stream = chatgpt.build_request_body(&messages, None, &options, true);
         assert_eq!(body_stream["stream"], true);
 
         // Test without optional parameters
-        let xai_minimal = Xai::builder().api_key("test-key").build().unwrap();
+        let chatgpt_minimal = Chatgpt::builder().api_key("test-key").build().unwrap();
 
-        let body_minimal = xai_minimal.build_request_body(
+        let body_minimal = chatgpt_minimal.build_request_body(
             &messages,
             None,
             &RequestOptions { tool_choice: None },
             false,
         );
 
-        assert_eq!(body_minimal["model"], "grok-4-1-fast-reasoning");
+        assert_eq!(body_minimal["model"], "gpt-4o-mini");
         assert!(body_minimal.get("temperature").is_some()); // temperature is optional
-        assert!(body_minimal.get("max_completion_tokens").is_none());
+        assert!(body_minimal.get("max_tokens").is_none());
         assert!(body_minimal.get("top_p").is_none());
         assert!(body_minimal.get("tool_choice").is_none());
         assert!(body_minimal.get("tools").is_none());
     }
 
     #[test]
-    fn test_xai_client_endpoint() {
-        let client = XaiClient::new("test-key".to_string(), "https://api.x.ai/v1/".to_string());
+    fn test_chatgpt_client_endpoint() {
+        let client = ChatgptClient::new(
+            "test-key".to_string(),
+            "https://api.openai.com/v1/".to_string(),
+        );
 
         assert_eq!(
             client.endpoint("chat/completions"),
-            "https://api.x.ai/v1/chat/completions"
+            "https://api.openai.com/v1/chat/completions"
         );
-        assert_eq!(client.endpoint("/models"), "https://api.x.ai/v1/models");
+        assert_eq!(
+            client.endpoint("/models"),
+            "https://api.openai.com/v1/models"
+        );
     }
 }

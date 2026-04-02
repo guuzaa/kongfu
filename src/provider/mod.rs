@@ -1,3 +1,4 @@
+pub mod chatgpt;
 pub mod ollama;
 mod types;
 pub mod xai;
@@ -8,6 +9,7 @@ pub use types::{
     RequestOptions, StreamingProvider, StreamingUpdate, Tool, ToolCall, ToolChoice, Usage,
 };
 
+pub use chatgpt::{Chatgpt, ChatgptBuilder};
 pub use ollama::{Ollama, OllamaBuilder};
 pub use xai::{Xai, XaiBuilder};
 pub use zai::{Zai, ZaiBuilder};

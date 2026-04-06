@@ -1,17 +1,16 @@
 use crate::error::{KongfuError, Result};
 use crate::http_client::HttpClient;
 use crate::message::{ContentBlock, Message, ToolUseBlock};
+use crate::provider::sse_stream::{SseChunk, SseStream};
 use crate::provider::types::{StreamingProvider, StreamingUpdate};
 use crate::provider::{
     CommonBuilder, ModelConfig, ModelResponse, Provider, ProviderName, RequestOptions, Tool,
     ToolCall, Usage,
 };
 use async_trait::async_trait;
-use futures::Stream;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
-use std::pin::Pin;
 
 pub struct Xai {
     config: ModelConfig,
@@ -121,13 +120,13 @@ impl XaiBuilder {
     }
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, Clone)]
 struct PromptTokensDetails {
     #[serde(default)]
     cached_tokens: usize,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, Clone)]
 struct CompletionTokensDetails {
     #[serde(default)]
     reasoning_tokens: usize,
@@ -139,7 +138,7 @@ struct CompletionTokensDetails {
     rejected_prediction_tokens: usize,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct XaiUsage {
     pub prompt_tokens: usize,
     pub completion_tokens: usize,
@@ -222,6 +221,41 @@ struct XaiStreamDelta {
     tool_calls: Option<Vec<ToolCall>>,
 }
 
+// Implement SseChunk trait for XAI chunks
+impl SseChunk for XaiStreamChunk {
+    fn model(&self) -> &str {
+        &self.model
+    }
+
+    fn usage(&self) -> Option<Usage> {
+        self.usage.clone().map(Usage::from)
+    }
+
+    fn finish_reason(&self) -> Option<&str> {
+        self.choices
+            .first()
+            .and_then(|c| c.finish_reason.as_deref())
+    }
+
+    fn thinking_delta(&self) -> Option<&str> {
+        self.choices
+            .first()
+            .and_then(|c| c.delta.reasoning_content.as_deref())
+    }
+
+    fn content_delta(&self) -> Option<&str> {
+        self.choices
+            .first()
+            .and_then(|c| c.delta.content.as_deref())
+    }
+
+    fn tool_call_deltas(&self) -> Option<&[ToolCall]> {
+        self.choices
+            .first()
+            .and_then(|c| c.delta.tool_calls.as_deref())
+    }
+}
+
 impl From<XaiUsage> for Usage {
     fn from(usage: XaiUsage) -> Self {
         Self {
@@ -286,204 +320,8 @@ impl TryFrom<XaiResponse> for ModelResponse {
     }
 }
 
-struct XaiResponseStream {
-    byte_stream: Pin<Box<dyn Stream<Item = reqwest::Result<bytes::Bytes>> + Send>>,
-    buffer: String,
-    is_done: bool,
-    thinking_content: String,
-    response_content: String,
-    finish_reason: Option<String>,
-    model: String,
-    usage: Option<Usage>,
-    tool_calls: Vec<ToolCall>,
-}
-
-impl XaiResponseStream {
-    fn new<S>(byte_stream: S, model: String) -> Self
-    where
-        S: Stream<Item = reqwest::Result<bytes::Bytes>> + Send + 'static,
-    {
-        Self {
-            byte_stream: Box::pin(byte_stream),
-            buffer: String::new(),
-            is_done: false,
-            thinking_content: String::new(),
-            response_content: String::new(),
-            finish_reason: None,
-            model,
-            usage: None,
-            tool_calls: Vec::new(),
-        }
-    }
-
-    fn parse_sse_event(&mut self, event: &str) -> Option<Result<StreamingUpdate>> {
-        let event = event.trim();
-        if event.is_empty() {
-            return None;
-        }
-
-        if !event.starts_with("data: ") {
-            return None;
-        }
-
-        let data_str = &event[6..]; // to trim "data: "
-
-        if data_str.trim() == "[DONE]" {
-            self.is_done = true;
-            let mut content_blocks = Vec::new();
-
-            if !self.thinking_content.is_empty() {
-                content_blocks.push(ContentBlock::thinking(self.thinking_content.clone()));
-            }
-            if !self.response_content.is_empty() {
-                content_blocks.push(ContentBlock::text(self.response_content.clone()));
-            }
-
-            for tool_call in &self.tool_calls {
-                let args_map: HashMap<String, serde_json::Value> =
-                    match serde_json::from_str(&tool_call.function.arguments) {
-                        Ok(map) => map,
-                        Err(e) => {
-                            return Some(Err(KongfuError::ResponseParseError(format!(
-                                "Failed to parse tool call arguments: {}",
-                                e
-                            ))));
-                        }
-                    };
-
-                content_blocks.push(ContentBlock::ToolUse(ToolUseBlock::new(
-                    tool_call.id.clone(),
-                    tool_call.function.name.clone(),
-                    args_map,
-                )));
-            }
-
-            if content_blocks.is_empty() {
-                content_blocks.push(ContentBlock::text(String::new()));
-            }
-
-            let response = ModelResponse {
-                content: content_blocks,
-                model: self.model.clone(),
-                usage: self.usage.take(),
-                finish_reason: self.finish_reason.clone(),
-            };
-            return Some(Ok(StreamingUpdate::Done(response)));
-        }
-
-        match serde_json::from_str::<XaiStreamChunk>(data_str) {
-            Ok(chunk) => {
-                // Update model from the first chunk
-                if self.model.is_empty() {
-                    self.model = chunk.model.clone();
-                }
-
-                if let Some(usage) = chunk.usage {
-                    self.usage = Some(usage.into());
-                }
-
-                if let Some(choice) = chunk.choices.first() {
-                    // Store finish reason if present
-                    if let Some(reason) = &choice.finish_reason {
-                        self.finish_reason = Some(reason.clone());
-                    }
-
-                    let delta = &choice.delta;
-
-                    // Handle reasoning content (for reasoning models)
-                    if let Some(reasoning_content) = &delta.reasoning_content {
-                        if !reasoning_content.is_empty() {
-                            self.thinking_content.push_str(reasoning_content);
-                            return Some(Ok(StreamingUpdate::Thinking(reasoning_content.clone())));
-                        }
-                    }
-
-                    // Handle regular content
-                    if let Some(content) = &delta.content {
-                        if !content.is_empty() {
-                            self.response_content.push_str(content);
-                            return Some(Ok(StreamingUpdate::Content(content.clone())));
-                        }
-                    }
-
-                    // Handle tool calls
-                    if let Some(tool_calls) = &delta.tool_calls {
-                        for tool_call in tool_calls {
-                            // Check if we already have this tool call (by id)
-                            let existing_pos =
-                                self.tool_calls.iter().position(|tc| tc.id == tool_call.id);
-
-                            if let Some(pos) = existing_pos {
-                                // Append to existing tool call's arguments
-                                self.tool_calls[pos]
-                                    .function
-                                    .arguments
-                                    .push_str(&tool_call.function.arguments);
-                            } else {
-                                // Add new tool call
-                                self.tool_calls.push(tool_call.clone());
-                            }
-
-                            // Emit the tool call update
-                            if !tool_call.id.is_empty() && !tool_call.function.arguments.is_empty()
-                            {
-                                return Some(Ok(StreamingUpdate::ToolCall(tool_call.clone())));
-                            }
-                        }
-                    }
-                }
-                None
-            }
-            Err(e) => Some(Err(KongfuError::ResponseParseError(format!(
-                "Failed to parse SSE chunk: {}",
-                e
-            )))),
-        }
-    }
-}
-
-impl futures::Stream for XaiResponseStream {
-    type Item = Result<StreamingUpdate>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        if self.is_done {
-            return std::task::Poll::Ready(None);
-        }
-
-        while let Some(event_end) = self.buffer.find("\n\n") {
-            let event = self.buffer.drain(..event_end + 2).collect::<String>();
-
-            if let Some(result) = self.parse_sse_event(&event) {
-                return std::task::Poll::Ready(Some(result));
-            }
-        }
-
-        match std::pin::Pin::new(&mut self.byte_stream).poll_next(cx) {
-            std::task::Poll::Ready(Some(Ok(bytes))) => {
-                let chunk = String::from_utf8_lossy(bytes.as_ref());
-                self.buffer.push_str(&chunk);
-
-                if let Some(event_end) = self.buffer.find("\n\n") {
-                    let event = self.buffer.drain(..event_end + 2).collect::<String>();
-                    if let Some(result) = self.parse_sse_event(&event) {
-                        return std::task::Poll::Ready(Some(result));
-                    }
-                }
-
-                cx.waker().wake_by_ref();
-                std::task::Poll::Pending
-            }
-            std::task::Poll::Ready(Some(Err(e))) => std::task::Poll::Ready(Some(Err(
-                KongfuError::StreamError(format!("Stream error: {}", e)),
-            ))),
-            std::task::Poll::Ready(None) => std::task::Poll::Ready(None),
-            std::task::Poll::Pending => std::task::Poll::Pending,
-        }
-    }
-}
+// Type alias for the generic SSE stream using XAI chunks
+type XaiResponseStream = SseStream<XaiStreamChunk>;
 
 #[async_trait]
 impl Provider for Xai {

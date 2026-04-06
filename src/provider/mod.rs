@@ -1,5 +1,6 @@
 pub mod chatgpt;
 pub mod ollama;
+mod sse_stream;
 mod types;
 pub mod xai;
 pub mod zai;

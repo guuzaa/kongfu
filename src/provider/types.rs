@@ -1,4 +1,4 @@
-use crate::error::Result;
+use crate::error::{KongfuError, Result};
 use crate::message::{ContentBlock, Message};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -105,6 +105,113 @@ pub struct Capabilities {
     pub tool_use: bool,
     pub vision: bool,
     pub max_context_tokens: u32,
+}
+
+/// Common builder struct that can be used by all providers
+/// Contains the shared configuration fields and setter methods
+#[derive(Default)]
+pub struct CommonBuilder {
+    pub model: Option<String>,
+    pub api_key: Option<String>,
+    pub base_url: Option<String>,
+    pub temperature: Option<f64>,
+    pub max_tokens: Option<u32>,
+    pub top_p: Option<f64>,
+}
+
+impl CommonBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
+    }
+
+    pub fn api_key(mut self, api_key: impl Into<String>) -> Self {
+        self.api_key = Some(api_key.into());
+        self
+    }
+
+    pub fn base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = Some(base_url.into());
+        self
+    }
+
+    pub fn temperature(mut self, temperature: f64) -> Self {
+        self.temperature = Some(temperature);
+        self
+    }
+
+    pub fn max_tokens(mut self, max_tokens: u32) -> Self {
+        self.max_tokens = Some(max_tokens);
+        self
+    }
+
+    pub fn top_p(mut self, top_p: f64) -> Self {
+        self.top_p = Some(top_p);
+        self
+    }
+
+    /// Convert the builder into a ModelConfig with provider-specific defaults and env vars
+    pub fn into_config(
+        self,
+        api_key_env: &str,
+        base_url_env: &str,
+        default_base_url: &str,
+        default_model: &str,
+    ) -> Result<ModelConfig> {
+        let api_key = self
+            .api_key
+            .or_else(|| std::env::var(api_key_env).ok())
+            .ok_or_else(|| {
+                KongfuError::InvalidConfig(format!(
+                    "api_key is required. Set it via builder.api_key() or {} environment variable",
+                    api_key_env
+                ))
+            })?;
+
+        let base_url = self
+            .base_url
+            .or_else(|| std::env::var(base_url_env).ok())
+            .unwrap_or_else(|| default_base_url.to_string());
+
+        let model = self.model.unwrap_or_else(|| default_model.to_string());
+
+        Ok(ModelConfig {
+            model,
+            base_url,
+            api_key,
+            temperature: self.temperature.unwrap_or(0.7),
+            max_tokens: self.max_tokens,
+            top_p: self.top_p,
+        })
+    }
+
+    /// Convert the builder into a ModelConfig for providers that don't require API keys (like Ollama)
+    pub fn into_config_no_auth(
+        self,
+        base_url_env: &str,
+        default_base_url: &str,
+        default_model: &str,
+    ) -> ModelConfig {
+        let base_url = self
+            .base_url
+            .or_else(|| std::env::var(base_url_env).ok())
+            .unwrap_or_else(|| default_base_url.to_string());
+
+        let model = self.model.unwrap_or_else(|| default_model.to_string());
+
+        ModelConfig {
+            model,
+            base_url,
+            api_key: String::new(), // No API key required
+            temperature: self.temperature.unwrap_or(0.7),
+            max_tokens: self.max_tokens,
+            top_p: self.top_p,
+        }
+    }
 }
 
 impl Default for Capabilities {

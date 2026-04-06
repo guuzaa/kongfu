@@ -25,6 +25,7 @@ uuid = {version = "1.23.0", features = ["v4", "serde"]}
 
 [dev-dependencies]
 mockall = "0.14.0"
+mockito = "1.6.1"
 tempfile = "3.27.0"
 
 [workspace.lints.rust]

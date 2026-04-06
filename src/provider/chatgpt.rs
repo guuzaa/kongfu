@@ -3,7 +3,8 @@ use crate::http_client::HttpClient;
 use crate::message::{ContentBlock, Message, ToolUseBlock};
 use crate::provider::types::{StreamingProvider, StreamingUpdate};
 use crate::provider::{
-    ModelConfig, ModelResponse, Provider, ProviderName, RequestOptions, Tool, ToolCall, Usage,
+    CommonBuilder, ModelConfig, ModelResponse, Provider, ProviderName, RequestOptions, Tool,
+    ToolCall, Usage,
 };
 use async_trait::async_trait;
 use futures::Stream;
@@ -65,14 +66,10 @@ impl Chatgpt {
     }
 }
 
+/// Builder for Chatgpt instances
 #[derive(Default)]
 pub struct ChatgptBuilder {
-    model: Option<String>,
-    api_key: Option<String>,
-    base_url: Option<String>,
-    temperature: Option<f64>,
-    max_tokens: Option<u32>,
-    top_p: Option<f64>,
+    inner: CommonBuilder,
 }
 
 impl ChatgptBuilder {
@@ -81,58 +78,42 @@ impl ChatgptBuilder {
     }
 
     pub fn model(mut self, model: impl Into<String>) -> Self {
-        self.model = Some(model.into());
+        self.inner = self.inner.model(model);
         self
     }
 
     pub fn api_key(mut self, api_key: impl Into<String>) -> Self {
-        self.api_key = Some(api_key.into());
+        self.inner = self.inner.api_key(api_key);
         self
     }
 
     pub fn base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = Some(base_url.into());
+        self.inner = self.inner.base_url(base_url);
         self
     }
 
     pub fn temperature(mut self, temperature: f64) -> Self {
-        self.temperature = Some(temperature);
+        self.inner = self.inner.temperature(temperature);
         self
     }
 
     pub fn max_tokens(mut self, max_tokens: u32) -> Self {
-        self.max_tokens = Some(max_tokens);
+        self.inner = self.inner.max_tokens(max_tokens);
         self
     }
 
     pub fn top_p(mut self, top_p: f64) -> Self {
-        self.top_p = Some(top_p);
+        self.inner = self.inner.top_p(top_p);
         self
     }
 
     pub fn build(self) -> Result<Chatgpt> {
-        let api_key = self
-            .api_key
-            .or_else(|| std::env::var("OPENAI_API_KEY").ok())
-            .ok_or_else(|| KongfuError::InvalidConfig(
-                "api_key is required. Set it via ChatgptBuilder::api_key() or OPENAI_API_KEY environment variable".to_string()
-            ))?;
-
-        let base_url = self
-            .base_url
-            .or_else(|| std::env::var("OPENAI_BASE_URL").ok())
-            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-
-        let model = self.model.unwrap_or_else(|| "gpt-4o-mini".to_string());
-
-        let config = ModelConfig {
-            model,
-            base_url,
-            api_key,
-            temperature: self.temperature.unwrap_or(0.7),
-            max_tokens: self.max_tokens,
-            top_p: self.top_p,
-        };
+        let config = self.inner.into_config(
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+            "https://api.openai.com/v1",
+            "gpt-4o-mini",
+        )?;
 
         let client = HttpClient::new(Some(config.api_key.clone()), config.base_url.clone());
 

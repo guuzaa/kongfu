@@ -3,7 +3,7 @@ use crate::http_client::HttpClient;
 use crate::message::{ContentBlock, Message, Role, ToolUseBlock};
 use crate::provider::types::{StreamingProvider, StreamingUpdate};
 use crate::provider::{
-    ModelConfig, ModelResponse, Provider, ProviderName, RequestOptions, Tool, Usage,
+    CommonBuilder, ModelConfig, ModelResponse, Provider, ProviderName, RequestOptions, Tool, Usage,
 };
 use async_trait::async_trait;
 use futures::Stream;
@@ -114,13 +114,10 @@ impl Ollama {
     }
 }
 
+/// Builder for Ollama instances (no API key required)
 #[derive(Default)]
 pub struct OllamaBuilder {
-    model: Option<String>,
-    base_url: Option<String>,
-    temperature: Option<f64>,
-    max_tokens: Option<u32>,
-    top_p: Option<f64>,
+    inner: CommonBuilder,
 }
 
 impl OllamaBuilder {
@@ -129,46 +126,34 @@ impl OllamaBuilder {
     }
 
     pub fn model(mut self, model: impl Into<String>) -> Self {
-        self.model = Some(model.into());
+        self.inner = self.inner.model(model);
         self
     }
 
     pub fn base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = Some(base_url.into());
+        self.inner = self.inner.base_url(base_url);
         self
     }
 
     pub fn temperature(mut self, temperature: f64) -> Self {
-        self.temperature = Some(temperature);
+        self.inner = self.inner.temperature(temperature);
         self
     }
 
     pub fn max_tokens(mut self, max_tokens: u32) -> Self {
-        self.max_tokens = Some(max_tokens);
+        self.inner = self.inner.max_tokens(max_tokens);
         self
     }
 
     pub fn top_p(mut self, top_p: f64) -> Self {
-        self.top_p = Some(top_p);
+        self.inner = self.inner.top_p(top_p);
         self
     }
 
     pub fn build(self) -> Ollama {
-        let base_url = self
-            .base_url
-            .or_else(|| std::env::var("OLLAMA_BASE_URL").ok())
-            .unwrap_or_else(|| "http://127.0.0.1:11434".to_string());
-
-        let model = self.model.unwrap_or_else(|| "llama3.2".to_string());
-
-        let config = ModelConfig {
-            model,
-            base_url,
-            api_key: String::new(), // Ollama doesn't require API key
-            temperature: self.temperature.unwrap_or(0.7),
-            max_tokens: self.max_tokens,
-            top_p: self.top_p,
-        };
+        let config =
+            self.inner
+                .into_config_no_auth("OLLAMA_BASE_URL", "http://127.0.0.1:11434", "llama3.2");
 
         let client = HttpClient::new(None, config.base_url.clone());
 
